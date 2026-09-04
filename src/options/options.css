@@ -1,4 +1,9 @@
-/* NutEgg Options Page */
+:root {
+  --primary: #a8561e;
+  --primary-hover: #8c4414;
+  --primary-light: #fdf6ed;
+  --primary-border: #ebd6b7;
+}
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -19,6 +24,16 @@ h1 {
   font-size: 20px;
   margin-bottom: 24px;
   color: #1a1a2e;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  vertical-align: middle;
 }
 
 .option-group {
@@ -69,7 +84,7 @@ h1 {
 }
 
 .port-url strong {
-  color: #7c3aed;
+  color: var(--primary, #a8561e);
 }
 
 .hint {
@@ -86,7 +101,7 @@ h1 {
 
 .primary-btn {
   padding: 8px 18px;
-  background: #7c3aed;
+  background: var(--primary, #a8561e);
   color: #fff;
   border: none;
   border-radius: 6px;
@@ -95,7 +110,7 @@ h1 {
   cursor: pointer;
 }
 
-.primary-btn:hover { background: #6d28d9; }
+.primary-btn:hover { background: var(--primary-hover, #8c4414); }
 
 .secondary-btn {
   padding: 8px 18px;
@@ -117,7 +132,7 @@ h1 {
 .test-result.error { color: #dc2626; }
 
 .option-group a {
-  color: #7c3aed;
+  color: var(--primary, #a8561e);
   text-decoration: none;
 }
 .option-group a:hover { text-decoration: underline; }
