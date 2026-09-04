@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NutEgg</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-top">
+        <span class="logo">🥚 NutEgg</span>
+        <div class="header-actions">
+          <div id="ai-credit-pill" class="ai-credit-pill hidden" title="Current AI provider and remaining credit (click to refresh)">
+            <span class="ai-credit-icon">🪙</span>
+            <span id="ai-credit-text">AI Credit</span>
+          </div>
+          <span id="server-status" class="status-dot offline" title="Obsidian server status"></span>
+          <button id="settings-btn" class="settings-btn" title="Settings">⚙️</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- State 1: Capture -->
+    <div id="capture-state">
+      <div id="page-info" class="page-info">
+        <div class="page-info-top">
+          <div class="page-title" id="page-title">Loading...</div>
+          <button id="refresh-btn" class="refresh-btn" title="Refresh content extraction">🔄</button>
+        </div>
+        <div class="page-url" id="page-url"></div>
+        <div class="page-type" id="page-type"></div>
+        <div class="page-provenance">
+          <span id="page-author"></span>
+          <span id="page-published"></span>
+        </div>
+      </div>
+
+      <div id="content-preview" class="content-preview">Loading content…</div>
+
+      <button id="questions-toggle" class="questions-toggle">💭 Ask your own questions <span class="questions-toggle-chevron">▾</span></button>
+      <div id="questions-area" class="questions-area hidden">
+        <textarea id="custom-questions" rows="3"
+          placeholder="One question per line — answered along with the egg's key questions."></textarea>
+      </div>
+
+      <div id="warning-banner" class="warning-banner hidden">
+        <span class="warning-icon">⚠️</span>
+        <div id="warning-message"></div>
+      </div>
+
+      <div id="error-banner" class="error-banner hidden">
+        <span class="error-icon">❌</span>
+        <div>
+          <div id="error-message"></div>
+          <div id="error-hint" class="error-hint hidden"></div>
+        </div>
+      </div>
+
+      <div id="duplicate-banner" class="duplicate-banner hidden">
+        <span class="duplicate-icon">📎</span>
+        <span id="duplicate-message"></span>
+      </div>
+
+      <div id="capture-credit-row" class="capture-credit-row hidden" title="Current AI provider & remaining balance (click to refresh)">
+        <span class="capture-credit-icon">🪙</span>
+        <span id="capture-credit-text">AI Credit</span>
+      </div>
+
+      <button id="analyze-btn" class="analyze-btn" disabled>
+        <span id="analyze-btn-text">Analyze</span>
+      </button>
+    </div>
+
+    <!-- State 2: Results -->
+    <div id="results-state" class="hidden">
+      <div id="result-page-info" class="page-info hidden">
+        <div class="page-title" id="result-page-title"></div>
+        <div class="page-provenance">
+          <span id="result-page-author"></span>
+          <span id="result-page-published"></span>
+        </div>
+      </div>
+
+      <div id="processed-note" class="duplicate-banner hidden">
+        <span class="duplicate-icon">📎</span>
+        <div class="processed-info">
+          <span id="processed-message"></span>
+          <div class="processed-actions">
+            <button id="reanalyze-btn" class="reanalyze-btn">🔄 Re-analyze</button>
+            <select id="history-select" class="history-select hidden"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-section">
+        <div class="section-label">🎯 Title Verdict</div>
+        <div id="verdict-answer" class="summary-text"></div>
+      </div>
+
+      <div class="result-section">
+        <div class="section-label">📋 Core Summary</div>
+        <ul id="core-summary" class="core-summary"></ul>
+      </div>
+
+      <div id="chapter-section" class="result-section hidden">
+        <div class="section-label">🗺️ Chapter Map <span class="section-hint">(click to jump)</span></div>
+        <div id="chapter-list" class="chapter-list"></div>
+      </div>
+
+      <div id="custom-questions-section" class="result-section hidden">
+        <div class="section-label">💭 Your Questions</div>
+        <div id="custom-questions-list" class="keyquestions-list"></div>
+        <div class="followup-area">
+          <input id="followup-input" type="text" placeholder="Ask a follow-up question about this content…" />
+          <button id="followup-btn" class="followup-btn">Ask</button>
+        </div>
+      </div>
+
+      <div id="keyquestions-section" class="result-section hidden">
+        <div class="section-label">💬 Key Questions</div>
+        <div id="keyquestions-list" class="keyquestions-list"></div>
+      </div>
+
+      <div id="delta-section" class="result-section hidden">
+        <div class="section-label">🧠 Knowledge Entries <span class="section-hint">(New insights vs existing tree)</span></div>
+        <div id="delta-list" class="delta-list"></div>
+      </div>
+
+      <div class="result-section">
+        <div class="section-label">📖 Should you read it?</div>
+        <div id="verdict-badge" class="verdict-badge">
+          <span id="verdict-icon"></span>
+          <span id="verdict-text"></span>
+        </div>
+        <div id="verdict-reason" class="verdict-reason"></div>
+      </div>
+
+      <div id="no-egg-section" class="result-section hidden">
+        <div class="section-label">🐣 No egg matched — create one?</div>
+        <div class="create-egg-box">
+          <input id="new-egg-name" type="text" placeholder="egg name (e.g. productivity)" />
+          <input id="new-egg-description" type="text" placeholder="what this egg captures (one line)" />
+          <button id="create-egg-btn" class="confirm-btn create-egg-btn">Create Egg</button>
+        </div>
+      </div>
+
+      <div id="eggs-section" class="result-section hidden">
+        <button id="eggs-toggle" class="questions-toggle">
+          <span>🥚 Eggs <span id="eggs-toggle-label" class="eggs-toggle-label"></span></span>
+          <span id="eggs-toggle-chevron" class="questions-toggle-chevron">▸</span>
+        </button>
+        <div id="eggs-expanded" class="hidden">
+          <div id="eggs-list" class="eggs-list"></div>
+          <div id="eggs-create-inline" class="create-egg-inline">
+            <button id="eggs-create-toggle" class="eggs-create-toggle">➕ Create new egg</button>
+            <div id="eggs-create-form" class="create-egg-box hidden">
+              <input id="eggs-new-name" type="text" placeholder="egg name (e.g. productivity)" />
+              <input id="eggs-new-desc" type="text" placeholder="what this egg captures (one line)" />
+              <button id="eggs-create-btn" class="confirm-btn create-egg-btn">Create Egg</button>
+            </div>
+          </div>
+          <button id="reanalyze-eggs-btn" class="reanalyze-btn reanalyze-eggs-btn hidden">🔄 Re-analyze with selected eggs</button>
+          <div id="eggs-error" class="eggs-error hidden"></div>
+        </div>
+      </div>
+
+      <div class="action-buttons">
+        <button id="confirm-btn" class="confirm-btn hidden">🥚 Hatch Egg</button>
+        <button id="save-raw-btn" class="save-raw-btn">🥜 Collect Nut</button>
+        <button id="discard-btn" class="discard-btn">Discard</button>
+        <button id="back-btn" class="back-btn">← Back</button>
+      </div>
+
+      <div id="success-banner" class="success-banner hidden">
+        <span class="success-icon">✅</span>
+        <span id="success-message"></span>
+      </div>
+    </div>
+
+    <div id="metrics-bar" class="metrics-bar">
+      <span class="metric" title="Nuts collected">🥜 <strong id="metric-nuts">0</strong></span>
+      <span class="metric" title="Eggs created">🥚 <strong id="metric-eggs">0</strong></span>
+      <span class="metric" title="Time saved">⏱️ <strong id="metric-time">0m</strong></span>
+    </div>
+
+    <footer class="footer">
+      <small>NutEgg v1.0.0</small>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
