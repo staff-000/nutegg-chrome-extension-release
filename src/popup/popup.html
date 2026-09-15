@@ -34,6 +34,19 @@
       </div>
     </header>
 
+    <div id="warning-banner" class="warning-banner hidden">
+      <span class="warning-icon">⚠️</span>
+      <div id="warning-message"></div>
+    </div>
+
+    <div id="error-banner" class="error-banner hidden">
+      <span class="error-icon">❌</span>
+      <div>
+        <div id="error-message"></div>
+        <div id="error-hint" class="error-hint hidden"></div>
+      </div>
+    </div>
+
     <!-- State 1: Capture -->
     <div id="capture-state" class="hidden">
       <div id="page-info" class="page-info">
@@ -64,19 +77,6 @@
           placeholder="One question per line — answered along with the egg's key questions."></textarea>
       </div>
 
-      <div id="warning-banner" class="warning-banner hidden">
-        <span class="warning-icon">⚠️</span>
-        <div id="warning-message"></div>
-      </div>
-
-      <div id="error-banner" class="error-banner hidden">
-        <span class="error-icon">❌</span>
-        <div>
-          <div id="error-message"></div>
-          <div id="error-hint" class="error-hint hidden"></div>
-        </div>
-      </div>
-
       <div id="duplicate-banner" class="duplicate-banner hidden">
         <span class="duplicate-icon">📎</span>
         <span id="duplicate-message"></span>
@@ -85,6 +85,14 @@
       <div id="capture-credit-row" class="capture-credit-row hidden" title="Current AI provider & remaining balance (click to refresh)">
         <span class="capture-credit-icon">🪙</span>
         <span id="capture-credit-text">AI Credit</span>
+      </div>
+
+      <!-- Analysis Mode Selector -->
+      <div class="mode-toggle-wrap">
+        <div class="mode-pill" id="mode-pill" role="group" aria-label="Analysis Mode">
+          <button type="button" class="mode-pill-btn active" id="mode-fast-btn" title="Full analysis in 1 click (fastest)">⚡ Fast</button>
+          <button type="button" class="mode-pill-btn" id="mode-confirm-btn" title="Review matching eggs before comparing knowledge (saves tokens)">🎯 Confirm Eggs</button>
+        </div>
       </div>
 
       <button id="analyze-btn" class="analyze-btn" disabled>
@@ -113,7 +121,46 @@
         </div>
       </div>
 
-       <div class="result-section">
+      <div id="success-banner" class="success-banner hidden">
+        <span class="success-icon">✅</span>
+        <span id="success-message"></span>
+      </div>
+
+      <!-- Stage 1 Confirmation Card (Confirm Eggs Mode) -->
+      <div id="stage1-confirm-box" class="stage1-confirm-box hidden">
+        <div class="stage1-confirm-header">
+          <span class="stage1-confirm-icon">🎯</span>
+          <div class="stage1-confirm-text" id="stage1-confirm-text">
+            <strong>Stage 1 Complete:</strong> Review matching eggs below to hatch into the vault and decide if worth reading.
+          </div>
+        </div>
+        <div class="stage1-confirm-actions">
+          <button id="stage1-proceed-btn" class="confirm-btn stage1-proceed-btn">🐣 Hatch Egg</button>
+          <button id="stage1-skip-btn" class="collect-nut-btn">🌰 Collect Nut Only</button>
+        </div>
+      </div>
+
+      <div id="eggs-section" class="result-section hidden">
+        <button id="eggs-toggle" class="questions-toggle">
+          <span>🥚 Eggs <span id="eggs-toggle-label" class="eggs-toggle-label"></span></span>
+          <span id="eggs-toggle-chevron" class="questions-toggle-chevron">▸</span>
+        </button>
+        <div id="eggs-expanded" class="hidden">
+          <div id="eggs-list" class="eggs-list"></div>
+          <div id="eggs-create-inline" class="create-egg-inline">
+            <button id="eggs-create-toggle" class="eggs-create-toggle">➕ Create a new egg</button>
+            <div id="eggs-create-form" class="create-egg-box hidden">
+              <input id="eggs-new-name" type="text" placeholder="egg name (e.g. productivity)" />
+              <input id="eggs-new-desc" type="text" placeholder="what this egg captures (one line)" />
+              <button id="eggs-create-btn" class="confirm-btn create-egg-btn">Create an Egg</button>
+            </div>
+          </div>
+          <button id="reanalyze-eggs-btn" class="reanalyze-btn reanalyze-eggs-btn hidden">🔄 Re-analyze with selected eggs</button>
+          <div id="eggs-error" class="eggs-error hidden"></div>
+        </div>
+      </div>
+
+      <div class="result-section" id="verdict-section">
         <div class="section-label">📖 Should you read it?</div>
         <div id="verdict-badge" class="verdict-badge">
           <span id="verdict-icon"></span>
@@ -146,14 +193,11 @@
         </div>
       </div>
 
-      <div id="keyquestions-section" class="result-section hidden">
-        <div class="section-label">💬 Key Questions</div>
-        <div id="keyquestions-list" class="keyquestions-list"></div>
-      </div>
-
-      <div id="delta-section" class="result-section hidden">
-        <div class="section-label">🧠 Knowledge Entries <span class="section-hint">(New insights vs existing tree)</span></div>
-        <div id="delta-list" class="delta-list"></div>
+      <!-- Unified Egg Knowledge Section with Tabs -->
+      <div id="egg-knowledge-section" class="result-section hidden">
+        <div class="section-label">🥚 Egg Knowledge <span class="section-hint" id="egg-knowledge-hint">(by egg)</span></div>
+        <div id="egg-tabs-bar" class="egg-tabs-bar hidden"></div>
+        <div id="egg-knowledge-content" class="egg-knowledge-content"></div>
       </div>
 
       <div id="no-egg-section" class="result-section hidden">
@@ -165,36 +209,11 @@
         </div>
       </div>
 
-      <div id="eggs-section" class="result-section hidden">
-        <button id="eggs-toggle" class="questions-toggle">
-          <span>🥚 Eggs <span id="eggs-toggle-label" class="eggs-toggle-label"></span></span>
-          <span id="eggs-toggle-chevron" class="questions-toggle-chevron">▸</span>
-        </button>
-        <div id="eggs-expanded" class="hidden">
-          <div id="eggs-list" class="eggs-list"></div>
-          <div id="eggs-create-inline" class="create-egg-inline">
-            <button id="eggs-create-toggle" class="eggs-create-toggle">➕ Create new egg</button>
-            <div id="eggs-create-form" class="create-egg-box hidden">
-              <input id="eggs-new-name" type="text" placeholder="egg name (e.g. productivity)" />
-              <input id="eggs-new-desc" type="text" placeholder="what this egg captures (one line)" />
-              <button id="eggs-create-btn" class="confirm-btn create-egg-btn">Create Egg</button>
-            </div>
-          </div>
-          <button id="reanalyze-eggs-btn" class="reanalyze-btn reanalyze-eggs-btn hidden">🔄 Re-analyze with selected eggs</button>
-          <div id="eggs-error" class="eggs-error hidden"></div>
-        </div>
-      </div>
-
       <div class="action-buttons">
         <button id="confirm-btn" class="confirm-btn hidden">🥚 Hatch Egg</button>
         <button id="collect-nut-btn" class="collect-nut-btn">🌰 Collect Nut</button>
         <button id="discard-btn" class="discard-btn">Discard</button>
         <button id="back-btn" class="back-btn">← Back</button>
-      </div>
-
-      <div id="success-banner" class="success-banner hidden">
-        <span class="success-icon">✅</span>
-        <span id="success-message"></span>
       </div>
     </div>
 
@@ -206,6 +225,9 @@
 
     <footer class="footer">
       <small id="version-tag">NutEgg 0.0.0</small>
+      <a href="https://community.obsidian.md/plugins/nutegg" target="_blank" rel="noopener" class="footer-link hidden" id="obsidian-plugin-link" title="Get NutEgg Obsidian Plugin">
+        <span>Get Obsidian Plugin</span> ↗
+      </a>
     </footer>
   </div>
 

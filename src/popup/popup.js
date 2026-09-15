@@ -44,10 +44,10 @@ const customQuestionsSection = document.getElementById("custom-questions-section
 const customQuestionsList = document.getElementById("custom-questions-list");
 const followupInput = document.getElementById("followup-input");
 const followupBtn = document.getElementById("followup-btn");
-const keyQuestionsSection = document.getElementById("keyquestions-section");
-const keyQuestionsList = document.getElementById("keyquestions-list");
-const deltaSection = document.getElementById("delta-section");
-const deltaList = document.getElementById("delta-list");
+const eggKnowledgeSection = document.getElementById("egg-knowledge-section");
+const eggKnowledgeHint = document.getElementById("egg-knowledge-hint");
+const eggTabsBar = document.getElementById("egg-tabs-bar");
+const eggKnowledgeContent = document.getElementById("egg-knowledge-content");
 const verdictIcon = document.getElementById("verdict-icon");
 const verdictText = document.getElementById("verdict-text");
 const verdictBadge = document.getElementById("verdict-badge");
@@ -83,11 +83,21 @@ const captureEggsLabel = document.getElementById("capture-eggs-label");
 const captureEggsChevron = document.getElementById("capture-eggs-chevron");
 const captureEggsArea = document.getElementById("capture-eggs-area");
 const captureEggsList = document.getElementById("capture-eggs-list");
+const obsidianPluginLink = document.getElementById("obsidian-plugin-link");
+
+// Mode toggle & Stage 1 elements
+const modeFastBtn = document.getElementById("mode-fast-btn");
+const modeConfirmBtn = document.getElementById("mode-confirm-btn");
+const verdictSection = document.getElementById("verdict-section");
+const stage1ConfirmBox = document.getElementById("stage1-confirm-box");
+const stage1ProceedBtn = document.getElementById("stage1-proceed-btn");
+const stage1SkipBtn = document.getElementById("stage1-skip-btn");
 
 let extractedContent = null;
 let serverOnline = false;
 let analysisResult = null;
 let activeTabId = null;
+let isReanalyzing = false;
 /** How the shown result was saved previously: "saved" | "skip" | "analyzed" | null (fresh analysis). */
 let cachedProcessedSaved = null;
 /** Follow-up questions asked after the result was shown (this session). */
@@ -106,6 +116,12 @@ let selectedEggs = new Set();
 /** Pre-selected eggs on the capture screen (before analyze). Empty = auto-detect. */
 let preSelectedEggs = new Set();
 
+/** Analysis mode: "fast" (1-click full) | "confirm" (confirm eggs after stage 1). */
+let analysisMode = "fast";
+let stage1Payload = null;
+let stage1ContentAnalysis = null;
+let activeEggTab = null;
+
 // --- Init ---
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -115,7 +131,31 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (version) versionTag.textContent = `NutEgg ${version}`;
   }
 
-  analyzeBtn.addEventListener("click", () => handleAnalyze(false));
+  // Restore analysis mode preference
+  try {
+    const stored = await new Promise((resolve) => {
+      chrome.storage?.local?.get?.(["analysisMode"], resolve);
+    });
+    if (stored?.analysisMode === "confirm" || stored?.analysisMode === "fast") {
+      setAnalysisMode(stored.analysisMode);
+    }
+  } catch {}
+
+  chrome.storage?.onChanged?.addListener((changes, areaName) => {
+    if (areaName === "local" && changes.analysisMode) {
+      const newMode = changes.analysisMode.newValue;
+      if (newMode === "confirm" || newMode === "fast") {
+        setAnalysisMode(newMode);
+      }
+    }
+  });
+
+  modeFastBtn?.addEventListener("click", () => setAnalysisMode("fast"));
+  modeConfirmBtn?.addEventListener("click", () => setAnalysisMode("confirm"));
+  stage1ProceedBtn?.addEventListener("click", () => handleProceedStage2(null, true));
+  stage1SkipBtn?.addEventListener("click", handleSaveRaw);
+
+  analyzeBtn.addEventListener("click", () => handleAnalyze(true));
   confirmBtn.addEventListener("click", handleConfirm);
   collectNutBtn.addEventListener("click", handleSaveRaw);
   discardBtn.addEventListener("click", handleDiscard);
@@ -137,6 +177,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const statusIndicatorWrap = document.getElementById("status-indicator-wrap");
   if (statusIndicatorWrap) {
     statusIndicatorWrap.addEventListener("click", () => {
+      if (!serverOnline) {
+        window.open("https://community.obsidian.md/plugins/nutegg", "_blank");
+        return;
+      }
       const title = document.getElementById("status-tooltip-title");
       const sub = document.getElementById("status-tooltip-sub");
       if (title) title.textContent = "Checking...";
@@ -167,28 +211,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   eggsCreateBtn.addEventListener("click", handleCreateEggInline);
   reanalyzeEggsBtn.addEventListener("click", async () => {
     if (selectedEggs.size === 0 || reanalyzeEggsBtn.disabled) return;
-    // The analysis runs in the background while the old results stay
-    // visible — reflect that on the button so the UI doesn't look dead.
     reanalyzeEggsBtn.disabled = true;
     const original = reanalyzeEggsBtn.textContent;
-    reanalyzeEggsBtn.textContent = "⏳ Re-analyzing…";
+    reanalyzeEggsBtn.textContent = "⏳ Analyzing…";
     eggsErrorEl.classList.add("hidden");
-    const error = await handleAnalyze(true, [...selectedEggs]);
+    if (stage1ContentAnalysis) {
+      await handleProceedStage2([...selectedEggs], false);
+    } else {
+      const error = await handleAnalyze(true, [...selectedEggs], true);
+      if (error) {
+        eggsErrorEl.textContent = `❌ ${error}`;
+        eggsErrorEl.classList.remove("hidden");
+      }
+    }
     reanalyzeEggsBtn.disabled = false;
     reanalyzeEggsBtn.textContent = original;
-    if (error) {
-      // The capture-state error banner is hidden in the results view —
-      // surface the failure inline under the egg picker.
-      eggsErrorEl.textContent = `❌ ${error}`;
-      eggsErrorEl.classList.remove("hidden");
-    }
   });
   // Egg picker is collapsed by default — expand on demand
   eggsToggle.addEventListener("click", () => {
     const expanded = eggsExpanded.classList.toggle("hidden");
     eggsToggleChevron.textContent = expanded ? "▾" : "▸";
   });
-  reanalyzeBtn.addEventListener("click", () => handleAnalyze(true));
+  reanalyzeBtn.addEventListener("click", () => handleAnalyze(true, null, true));
   historySelect.addEventListener("change", () => {
     const idx = parseInt(historySelect.value, 10);
     if (captureHistory[idx]) showHistoryEntry(captureHistory[idx]);
@@ -242,6 +286,7 @@ async function refreshForCurrentTab(forceExtract = false) {
   followupInput.value = "";
   preSelectedEggs.clear();
   updateCaptureEggsLabel();
+  isReanalyzing = false;
   processedNote.classList.add("hidden");
   historySelect.classList.add("hidden");
   historySelect.innerHTML = "";
@@ -326,9 +371,9 @@ async function handleCreateEgg() {
       description: newEggDescription.value.trim(),
     });
     if (response?.success) {
-      // The new egg now matches — re-analyze so its key questions and novel
-      // delta show up (handleAnalyze re-renders everything on success)
-      await handleAnalyze(true);
+      // Target the newly created egg explicitly
+      const eggFile = response.path ? response.path.split("/").pop() : slugify(name) + ".md";
+      await handleAnalyze(true, [eggFile]);
       return;
     }
     showError(response?.error || "Failed to create egg");
@@ -366,11 +411,11 @@ async function handleCreateEggInline() {
   eggsCreateBtn.textContent = "Create Egg";
 }
 
-/** Title → snake_case egg name fallback. */
+/** Title → snake_case egg name fallback (supports Unicode). */
 function slugify(text) {
   return (text || "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/[^\p{L}\p{N}_-]+/gu, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 60);
 }
@@ -470,7 +515,12 @@ function renderEggsSection(matchedEggs) {
       const name = ev.target.dataset.egg;
       if (ev.target.checked) selectedEggs.add(name);
       else selectedEggs.delete(name);
-      reanalyzeEggsBtn.classList.remove("hidden");
+      if (analysisResult?.stage === "stage1") {
+        reanalyzeEggsBtn?.classList.add("hidden");
+      } else {
+        reanalyzeEggsBtn?.classList.remove("hidden");
+      }
+      updateStage1ProceedBtn();
     });
   });
   reanalyzeEggsBtn.classList.add("hidden");
@@ -482,6 +532,136 @@ function renderEggsSection(matchedEggs) {
   eggsNewDesc.value = "";
   eggsCreateBtn.disabled = false;
   eggsCreateBtn.textContent = "Create Egg";
+}
+
+function setAnalysisMode(mode) {
+  analysisMode = mode;
+  if (mode === "confirm") {
+    modeConfirmBtn?.classList.add("active");
+    modeFastBtn?.classList.remove("active");
+  } else {
+    modeFastBtn?.classList.add("active");
+    modeConfirmBtn?.classList.remove("active");
+  }
+  chrome.storage?.local?.set?.({ analysisMode: mode });
+
+  if (analysisResult?.stage === "stage1") {
+    if (mode === "confirm") {
+      stage1ConfirmBox?.classList.remove("hidden");
+      verdictSection?.classList.add("hidden");
+      eggKnowledgeSection?.classList.add("hidden");
+      eggsExpanded?.classList.remove("hidden");
+      if (eggsToggleChevron) eggsToggleChevron.textContent = "▾";
+      updateStage1ProceedBtn();
+      window.scrollTo(0, 0);
+    } else {
+      stage1ConfirmBox?.classList.add("hidden");
+      verdictSection?.classList.remove("hidden");
+    }
+  }
+}
+
+function updateStage1ProceedBtn() {
+  if (!stage1ProceedBtn) return;
+  const count = selectedEggs.size;
+  const confirmTextEl = document.getElementById("stage1-confirm-text");
+  if (count === 0) {
+    stage1ProceedBtn.disabled = true;
+    stage1ProceedBtn.textContent = "🐣 Hatch Egg (Select egg)";
+    if (confirmTextEl) {
+      if (allEggs.length === 0) {
+        confirmTextEl.innerHTML = "<strong>No eggs in vault yet:</strong> Create an egg below to hatch into the vault, or collect the nut only.";
+      } else {
+        confirmTextEl.innerHTML = "<strong>No egg selected:</strong> Pick an egg below, create a new one, or collect the nut only.";
+      }
+    }
+  } else {
+    stage1ProceedBtn.disabled = false;
+    stage1ProceedBtn.textContent = count === 1 ? "🐣 Hatch Egg" : `🐣 Hatch Egg (${count})`;
+    if (confirmTextEl) {
+      confirmTextEl.innerHTML = `<strong>Stage 1 Complete:</strong> ${count} egg${count === 1 ? "" : "s"} selected. Click below to hatch into the vault.`;
+    }
+  }
+}
+
+async function handleProceedStage2(eggsToCompare = null, autoSave = false, skipScroll = false) {
+  const isExplicitEggs = Array.isArray(eggsToCompare);
+  const targetEggs = isExplicitEggs ? eggsToCompare : [...selectedEggs];
+  if (!isExplicitEggs && targetEggs.length === 0) {
+    if (eggsExpanded) eggsExpanded.classList.remove("hidden");
+    if (eggsToggleChevron) eggsToggleChevron.textContent = "▾";
+    const eggSec = document.getElementById("eggs-section");
+    if (eggSec) eggSec.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    showWarning("Please select or create at least one egg to hatch.");
+    return;
+  }
+
+  if (stage1ProceedBtn) {
+    stage1ProceedBtn.disabled = true;
+    stage1ProceedBtn.textContent = autoSave ? "Hatching the egg…" : "Analyzing egg…";
+  }
+  hideMessages();
+
+  try {
+    const payload = {
+      ...stage1Payload,
+      stage: 2,
+      eggs: targetEggs,
+      contentAnalysis: stage1ContentAnalysis || {
+        titleVerdict: analysisResult?.titleVerdict || "",
+        coreSummary: analysisResult?.coreSummary || [],
+        isLongForm: analysisResult?.isLongForm || false,
+        chapterMap: analysisResult?.chapterMap || [],
+        customQuestionAnswers: analysisResult?.customQuestionAnswers || [],
+      },
+    };
+
+    const response = await chrome.runtime.sendMessage({ action: "analyze", payload });
+    if (response?.error) {
+      showError(response.error, response.errorCode);
+      if (stage1ProceedBtn) {
+        stage1ProceedBtn.disabled = false;
+        updateStage1ProceedBtn();
+      }
+      return;
+    }
+
+    if (response.nutId) {
+      currentNutId = response.nutId;
+      cachedProcessedSaved = null;
+      captureHistory = [
+        {
+          nutId: response.nutId,
+          capturedAt: new Date().toISOString(),
+          saved: "analyzed",
+          result: response,
+        },
+        ...captureHistory,
+      ];
+    }
+
+    response.stage = "stage2";
+    showResultsState(response, provenanceFromExtraction());
+    if (autoSave) {
+      await doSave(response.newKnowledge || [], true);
+    }
+    if (!skipScroll) {
+      setTimeout(() => {
+        const target = eggKnowledgeSection && !eggKnowledgeSection.classList.contains("hidden")
+          ? eggKnowledgeSection
+          : verdictSection;
+        if (target && !target.classList.contains("hidden")) {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 100);
+    }
+  } catch (err) {
+    showError(err instanceof Error ? err.message : "Hatching failed");
+    if (stage1ProceedBtn) {
+      stage1ProceedBtn.disabled = false;
+      updateStage1ProceedBtn();
+    }
+  }
 }
 
 // --- Metrics ---
@@ -548,6 +728,8 @@ function renderCreditPill(credit) {
       ? "Gemini"
       : credit.provider === "openai"
       ? "OpenAI"
+      : credit.provider === "local"
+      ? (credit.model ? `Local (${credit.model})` : "Local LLM")
       : credit.providerLabel || credit.provider;
 
   if (credit.hasBalance && credit.balanceFormatted) {
@@ -575,10 +757,12 @@ async function checkServerStatus() {
     serverStatus.className = "status-dot online";
     updateServerStatusTooltip(true);
     checkCreditStatus();
+    obsidianPluginLink?.classList.add("hidden");
   } else {
     serverStatus.className = "status-dot offline";
     updateServerStatusTooltip(false);
     aiCreditPill?.classList.add("hidden");
+    obsidianPluginLink?.classList.remove("hidden");
   }
 }
 
@@ -596,8 +780,8 @@ function updateServerStatusTooltip(isOnline) {
   } else {
     tooltip.className = "status-tooltip offline";
     title.textContent = "Obsidian is offline";
-    sub.textContent = "Start Obsidian with NutEgg";
-    serverStatus.setAttribute("aria-label", "Obsidian is offline. Start Obsidian with NutEgg");
+    sub.textContent = "Click dot to install NutEgg plugin";
+    serverStatus.setAttribute("aria-label", "Obsidian is offline. Click dot to install NutEgg plugin");
   }
 }
 
@@ -832,36 +1016,79 @@ function applyTranscriptBlock() {
  * message on failure — callers in the results view surface it inline, since
  * the capture-state error banner is hidden there.
  */
-async function handleAnalyze(force = false, eggsOverride = null) {
+async function handleAnalyze(force = false, eggsOverride = null, isReanalyze = false) {
   if (!serverOnline) {
     showError("Obsidian server is offline. Start Obsidian with NutEgg plugin.");
     return "Obsidian server is offline. Start Obsidian with NutEgg plugin.";
   }
-  if (!extractedContent) {
-    analyzeBtn.disabled = true;
-    analyzeBtnText.textContent = "Retrieving…";
-    await extractPageContent();
-  }
-  if (!extractedContent) {
-    showError("Could not extract page content. Try refreshing.");
-    return "Could not extract page content. Try refreshing.";
-  }
-  if (isTranscriptBlocked()) {
-    applyTranscriptBlock();
-    return "Video transcript unavailable — NutEgg will not process this video.";
-  }
 
-  analyzeBtn.disabled = true;
-  analyzeBtnText.textContent = "Analyzing...";
+  isReanalyzing = isReanalyze;
   hideMessages();
+  if (isReanalyze) {
+    processedNote.classList.remove("hidden");
+    processedMessage.textContent = "Retrieving page content…";
+  }
+  if (reanalyzeBtn) {
+    reanalyzeBtn.disabled = true;
+    reanalyzeBtn.textContent = "Retrieving…";
+  }
+  analyzeBtn.disabled = true;
+  analyzeBtnText.textContent = "Retrieving…";
 
   try {
+    if (force || !extractedContent) {
+      await extractPageContent();
+    }
+
+    // Fallback: if extraction couldn't get content from the tab, check if we have stored content
+    if (!extractedContent && captureHistory.length > 0) {
+      const entry = captureHistory[0];
+      if (entry?.content) {
+        extractedContent = {
+          url: entry.url || pageUrl.textContent || "",
+          title: entry.title || pageTitle.textContent || "",
+          content: entry.content,
+          sourceType: entry.sourceType || "webpage",
+          metadata: {
+            ...(entry.author ? { author: entry.author } : {}),
+            ...(entry.publishedAt ? { published: entry.publishedAt } : {}),
+          },
+        };
+      }
+    }
+
+    if (!extractedContent) {
+      showError("Could not extract page content. Try refreshing.");
+      return "Could not extract page content. Try refreshing.";
+    }
+    if (isTranscriptBlocked()) {
+      applyTranscriptBlock();
+      return "Video transcript unavailable — NutEgg will not process this video.";
+    }
+
+    if (isReanalyze) {
+      processedNote.classList.remove("hidden");
+      processedMessage.textContent = "Analyzing content…";
+    }
+    if (reanalyzeBtn) {
+      reanalyzeBtn.disabled = true;
+      reanalyzeBtn.textContent = "Analyzing…";
+    }
+    analyzeBtn.disabled = true;
+    analyzeBtnText.textContent = "Analyzing...";
+
     const questions = customQuestionsEl.value
       .split("\n")
       .map((q) => q.trim())
       .filter(Boolean);
 
-    const targetEggs = eggsOverride || (preSelectedEggs.size > 0 ? [...preSelectedEggs] : null);
+    // Check which eggs are selected on the page or pre-selected
+    const targetEggs = eggsOverride ||
+      (selectedEggs.size > 0 ? [...selectedEggs] : null) ||
+      (analysisResult?.matchedEggs?.length > 0 ? analysisResult.matchedEggs : null) ||
+      (captureHistory[0]?.result?.matchedEggs?.length > 0 ? captureHistory[0].result.matchedEggs : null) ||
+      (preSelectedEggs.size > 0 ? [...preSelectedEggs] : null);
+
     const payload = {
       url: extractedContent.url || "",
       title: extractedContent.title || "",
@@ -870,86 +1097,148 @@ async function handleAnalyze(force = false, eggsOverride = null) {
       metadata: extractedContent.metadata,
       chapters: extractedContent.chapters || undefined,
       questions,
-      force,
-      ...(targetEggs ? { eggs: targetEggs } : {}),
+      force: true,
+      stage: 1,
+      ...(targetEggs && targetEggs.length > 0 ? { eggs: targetEggs } : {}),
     };
 
-    if (force) {
-      reanalyzeBtn.disabled = true;
-      reanalyzeBtn.textContent = "Analyzing…";
-    }
     const response = await chrome.runtime.sendMessage({ action: "analyze", payload });
-    if (force) {
-      reanalyzeBtn.disabled = false;
-      reanalyzeBtn.textContent = "🔄 Re-analyze";
-    }
-
-    // This URL has cached captures — show the latest with its timestamp,
-    // plus history browsing and a way to force a fresh analysis.
-    if (response?.history) {
-      captureHistory = response.history;
-      showHistoryEntry(response.latest || response.history[0]);
-      return null;
-    }
 
     if (response?.error) {
       showError(response.error, response.errorCode);
-      analyzeBtn.disabled = false;
-      analyzeBtnText.textContent = "Analyze";
       return response.error;
     }
 
-    // Fresh analysis — a NEW capture row was created in the DB.
-    // Keep it in captureHistory so Back shows "Analyze Again".
+    stage1Payload = payload;
+    stage1ContentAnalysis = response;
+
     cachedProcessedSaved = null;
-    captureHistory = [
-      {
-        nutId: response.nutId,
-        capturedAt: new Date().toISOString(),
-        saved: "analyzed",
-        result: response,
-      },
-      ...captureHistory,
-    ];
-    currentNutId = response.nutId ?? null;
     followUpQa = [];
     followupInput.value = "";
     nutCollected = false;
     eggHatched = false;
+    activeEggTab = null;
     analysisResult = response;
-    showResultsState(response, provenanceFromExtraction());
+
+    // For re-analyze (since eggs are already selected on the page) or fast mode, do both stage 1 and stage 2
+    const shouldRunStage2 = isReanalyze || analysisMode === "fast";
+    const eggsForStage2 = (targetEggs && targetEggs.length > 0)
+      ? targetEggs
+      : (response.matchedEggs && response.matchedEggs.length > 0 ? response.matchedEggs : []);
+
+    if (shouldRunStage2) {
+      // Immediately render Stage 1 (title verdict, summary, chapter map, matched eggs)
+      showResultsState(response, provenanceFromExtraction());
+
+      if (isReanalyze) {
+        processedNote.classList.remove("hidden");
+        processedMessage.textContent = "Comparing against selected eggs…";
+        if (reanalyzeBtn) {
+          reanalyzeBtn.disabled = true;
+          reanalyzeBtn.textContent = "Comparing knowledge…";
+        }
+      }
+
+      if (eggsForStage2.length > 0) {
+        if (!isReanalyze) {
+          if (verdictSection) verdictSection.classList.remove("hidden");
+          if (verdictBadge) verdictBadge.className = "verdict-badge";
+          if (verdictIcon) verdictIcon.textContent = "⏳";
+          if (verdictText) verdictText.textContent = "Comparing knowledge…";
+          if (verdictReason) {
+            verdictReason.textContent = `Comparing against ${eggsForStage2.length} egg(s)…`;
+          }
+        } else {
+          if (verdictSection) verdictSection.classList.add("hidden");
+        }
+        if (stage1ConfirmBox) stage1ConfirmBox.classList.add("hidden");
+
+        await handleProceedStage2(eggsForStage2, false, isReanalyze);
+      }
+
+      if (isReanalyze || captureHistory.length > 0) {
+        processedMessage.textContent = "Re-analyzed just now — showing fresh result.";
+        processedNote.classList.remove("hidden");
+      }
+    } else {
+      if (analysisMode === "confirm") {
+        response.stage = "stage1";
+        delete response.eggResults;
+        delete response.shouldRead;
+        delete response.shouldReadReason;
+        delete response.newKnowledge;
+      }
+      showResultsState(response, provenanceFromExtraction());
+    }
     return null;
   } catch (err) {
     const message = err instanceof Error ? err.message : "Analysis failed";
     showError(message);
-    analyzeBtn.disabled = false;
-    analyzeBtnText.textContent = "Analyze";
     return message;
+  } finally {
+    isReanalyzing = false;
+    if (reanalyzeBtn) {
+      reanalyzeBtn.disabled = false;
+      reanalyzeBtn.textContent = "🔄 Re-analyze";
+    }
+    analyzeBtn.disabled = false;
+    analyzeBtnText.textContent = analysisResult ? "🔄 Analyze Again" : "Analyze";
   }
 }
 
 // --- Show results ---
 
 function showResultsState(result, provenance = null) {
+  analysisResult = result;
   captureState.classList.add("hidden");
   resultsState.classList.remove("hidden");
-  processedNote.classList.add("hidden");
+  if (!isReanalyzing) {
+    processedNote.classList.add("hidden");
+  } else {
+    processedNote.classList.remove("hidden");
+  }
   renderResultProvenance(provenance);
 
-  // No egg matched — offer to create one (prefilled with the AI suggestion)
+  const isStage1 = result.stage === "stage1";
+
+  if (isStage1) {
+    if (isReanalyzing) {
+      stage1ConfirmBox?.classList.add("hidden");
+      verdictSection?.classList.add("hidden");
+    } else if (analysisMode === "fast") {
+      stage1ConfirmBox?.classList.add("hidden");
+      verdictSection?.classList.remove("hidden");
+    } else {
+      stage1ConfirmBox?.classList.remove("hidden");
+      verdictSection?.classList.add("hidden");
+    }
+    confirmBtn?.classList.add("hidden");
+  } else {
+    stage1ConfirmBox?.classList.add("hidden");
+    verdictSection?.classList.remove("hidden");
+  }
+
+  // No egg matched — offer to create one
   const noEgg = (result.matchedEggs || []).length === 0;
   if (noEgg) {
     noEggSection.classList.remove("hidden");
-    newEggName.value =
-      result.suggestedEgg?.name || slugify(extractedContent?.title || "");
-    newEggDescription.value = result.suggestedEgg?.description || "";
+    newEggName.value = "";
+    newEggDescription.value = "";
   } else {
     noEggSection.classList.add("hidden");
   }
 
   // Egg picker — sync the checklist with _index.md, then render it with
   // this result's matched eggs (user edits + re-analyze changes the match)
-  fetchEggs().then(() => renderEggsSection(result.matchedEggs || []));
+  fetchEggs().then(() => {
+    renderEggsSection(result.matchedEggs || []);
+    if (isStage1 && analysisMode === "confirm") {
+      eggsExpanded?.classList.remove("hidden");
+      if (eggsToggleChevron) eggsToggleChevron.textContent = "▾";
+      updateStage1ProceedBtn();
+      window.scrollTo(0, 0);
+    }
+  });
 
   // Title Verdict
   verdictAnswer.textContent = result.titleVerdict || "";
@@ -985,144 +1274,302 @@ function showResultsState(result, provenance = null) {
   // Your Questions — initial answers + follow-ups asked this session
   renderCustomQuestions();
 
-  // Key Questions — grouped per egg
-  const qaGroups = (result.eggResults || []).filter(
-    (r) => r.keyQuestionAnswers && r.keyQuestionAnswers.length > 0
-  );
-  if (qaGroups.length > 0) {
-    keyQuestionsSection.classList.remove("hidden");
-    keyQuestionsList.innerHTML = qaGroups
-      .map((r) => `
-        <div class="egg-group">
-          <div class="knowledge-egg">📄 ${escapeHtml(r.egg)}</div>
-          ${r.keyQuestionAnswers
-            .map((qa) => `
-              <div class="qa-item">
-                <div class="qa-question">Q: ${escapeHtml(qa.question)}</div>
-                <div class="qa-answer">${escapeHtml(qa.answer)}</div>
-              </div>`)
-            .join("")}
-        </div>`)
-      .join("");
+  // Egg Knowledge (Tabs + unified per-egg insights, Q&A, and tree)
+  renderEggKnowledge(isStage1 ? [] : (result.eggResults || []));
+
+  // Verdict
+  if (isStage1) {
+    if (analysisMode === "fast") {
+      verdictSection?.classList.remove("hidden");
+    } else {
+      verdictSection?.classList.add("hidden");
+    }
   } else {
-    keyQuestionsSection.classList.add("hidden");
-    keyQuestionsList.innerHTML = "";
+    verdictSection?.classList.remove("hidden");
+    if (result.shouldRead) {
+      verdictIcon.textContent = "✅";
+      verdictText.textContent = "Worth reading";
+      verdictBadge.className = "verdict-badge verdict-yes";
+    } else {
+      verdictIcon.textContent = "⏭️";
+      verdictText.textContent = "Skip it";
+      verdictBadge.className = "verdict-badge verdict-no";
+    }
+    verdictReason.textContent = result.shouldReadReason || "";
   }
 
-  // Knowledge Entries (New Insights vs Existing Tree)
-  const eggResults = result.eggResults || [];
-  const hasAnyKnowledge = eggResults.some(
-    (r) =>
-      (r.novelDelta && r.novelDelta.length > 0) ||
-      (r.redundantEntries && r.redundantEntries.length > 0) ||
-      (r.existingKnowledge && r.existingKnowledge.trim().length > 0)
-  );
+  successBanner.classList.add("hidden");
+  updateActionButtons();
+}
 
-  if (hasAnyKnowledge) {
-    deltaSection.classList.remove("hidden");
-    deltaList.innerHTML = eggResults
+function cleanEggName(fileName) {
+  if (!fileName) return "Egg";
+  return fileName.split("/").pop().replace(/\.md$/, "");
+}
+
+function renderEggKnowledge(eggResults = []) {
+  if (!eggKnowledgeSection || !eggKnowledgeContent) return;
+
+  if (eggResults.length === 0) {
+    eggKnowledgeSection.classList.add("hidden");
+    eggKnowledgeContent.innerHTML = "";
+    if (eggTabsBar) eggTabsBar.innerHTML = "";
+    return;
+  }
+
+  eggKnowledgeSection.classList.remove("hidden");
+
+  // Determine active tab
+  const eggNames = eggResults.map((r) => r.egg);
+  if (!activeEggTab || (!eggNames.includes(activeEggTab) && activeEggTab !== "all")) {
+    // Default to the first egg that has new deltas, or the first egg
+    const eggWithDeltas = eggResults.find((r) => (r.novelDelta || []).length > 0);
+    activeEggTab = eggWithDeltas ? eggWithDeltas.egg : eggResults[0].egg;
+  }
+
+  // Render Tabs (only if 2+ eggs)
+  if (eggResults.length > 1) {
+    eggTabsBar.classList.remove("hidden");
+    if (eggKnowledgeHint) eggKnowledgeHint.textContent = `(${eggResults.length} eggs matched)`;
+
+    const totalNewCount = eggResults.reduce((acc, r) => acc + (r.novelDelta?.length || 0), 0);
+
+    const tabsHtml = eggResults
       .map((r) => {
-        const newDeltas = r.novelDelta || [];
-        const redundantDeltas = r.redundantEntries || [];
-        const existingKnowledge = (r.existingKnowledge || "").trim();
-
-        let newHtml = "";
-        if (newDeltas.length > 0) {
-          newHtml = `
-            <div class="knowledge-subsection">
-              <div class="knowledge-subhead new-subhead">✨ New Insights (${newDeltas.length})</div>
-              ${newDeltas
-                .map((d) => `
-                  <div class="delta-item is-new">
-                    <div class="delta-header">
-                      <span class="delta-badge badge-new">+ New Entry</span>
-                      <span class="delta-parent">🐣 → Unprocessed${d.parent ? ` · suggested under: <strong>${escapeHtml(d.parent)}</strong>` : ""}</span>
-                    </div>
-                    <div class="delta-content">${escapeHtml(d.content)}</div>
-                  </div>`)
-                .join("")}
-            </div>`;
+        const newCount = (r.novelDelta || []).length;
+        let badgeClass = "badge-tab-covered";
+        let badgeText = "✓";
+        if (r.rejected) {
+          badgeClass = "badge-tab-reject";
+          badgeText = "✕";
+        } else if (newCount > 0) {
+          badgeClass = "badge-tab-new";
+          badgeText = `+${newCount}`;
         }
 
-        let redundantHtml = "";
-        if (redundantDeltas.length > 0) {
-          redundantHtml = `
-            <div class="knowledge-subsection">
-              <div class="knowledge-subhead covered-subhead">✅ Already in Tree (${redundantDeltas.length})</div>
+        const isActive = activeEggTab === r.egg ? " active" : "";
+        return `
+          <button type="button" class="egg-tab-btn${isActive}" data-tab="${escapeHtml(r.egg)}" title="${escapeHtml(r.egg)}">
+            <span class="egg-tab-name">${escapeHtml(cleanEggName(r.egg))}</span>
+            <span class="egg-tab-badge ${badgeClass}">${badgeText}</span>
+          </button>`;
+      })
+      .join("");
+
+    const isAllActive = activeEggTab === "all" ? " active" : "";
+    const allBadgeText = totalNewCount > 0 ? `+${totalNewCount}` : "✓";
+    const allBadgeClass = totalNewCount > 0 ? "badge-tab-new" : "badge-tab-covered";
+
+    eggTabsBar.innerHTML =
+      tabsHtml +
+      `
+      <button type="button" class="egg-tab-btn${isAllActive}" data-tab="all" title="View all eggs">
+        <span class="egg-tab-name">📋 All</span>
+        <span class="egg-tab-badge ${allBadgeClass}">${allBadgeText}</span>
+      </button>`;
+
+    // Tab click listeners
+    eggTabsBar.querySelectorAll(".egg-tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        activeEggTab = btn.dataset.tab;
+        renderEggKnowledge(eggResults);
+      });
+    });
+  } else {
+    eggTabsBar.classList.add("hidden");
+    eggTabsBar.innerHTML = "";
+    if (eggKnowledgeHint) eggKnowledgeHint.textContent = `(${cleanEggName(eggResults[0]?.egg)})`;
+    activeEggTab = eggResults[0]?.egg;
+  }
+
+  // Render Egg Cards
+  eggKnowledgeContent.innerHTML = eggResults
+    .map((r) => {
+      const isVisible = activeEggTab === "all" || activeEggTab === r.egg;
+      const hideClass = isVisible ? "" : " hidden";
+      const newDeltas = r.novelDelta || [];
+      const redundantDeltas = r.redundantEntries || [];
+      const existingKnowledge = (r.existingKnowledge || "").trim();
+      const qaItems = r.keyQuestionAnswers || [];
+
+      let statusHeader = "";
+      if (eggResults.length > 1 && activeEggTab === "all") {
+        statusHeader = `
+          <div class="egg-card-header">
+            <span class="egg-card-title">📄 ${escapeHtml(cleanEggName(r.egg))}</span>
+            <span class="egg-card-file">${escapeHtml(r.egg)}</span>
+          </div>`;
+      }
+
+      let statusNote = "";
+      if (r.rejected) {
+        statusNote = `
+          <div class="egg-status-banner banner-reject">
+            ⚠️ <strong>Rejected by this egg:</strong> ${escapeHtml(r.rejectReason || "Out of scope")}
+          </div>`;
+      } else if (newDeltas.length === 0 && redundantDeltas.length > 0) {
+        statusNote = `
+          <div class="egg-status-banner banner-covered">
+            ✅ <strong>Fully covered:</strong> All concepts already exist in your knowledge tree.
+          </div>`;
+      } else if (newDeltas.length === 0 && qaItems.length === 0) {
+        statusNote = `
+          <div class="egg-status-banner banner-covered">
+            ℹ️ No new knowledge entries extracted for this egg.
+          </div>`;
+      }
+
+      let newHtml = "";
+      if (newDeltas.length > 0) {
+        newHtml = `
+          <div class="knowledge-subsection">
+            <div class="knowledge-subhead new-subhead">✨ New Insights (${newDeltas.length})</div>
+            ${newDeltas
+              .map(
+                (d) => `
+                <div class="delta-item is-new">
+                  <div class="delta-header">
+                    <span class="delta-badge badge-new">+ New Entry</span>
+                    <span class="delta-parent">🐣 → Unprocessed${d.parent ? ` · suggested under: <strong>${escapeHtml(d.parent)}</strong>` : ""}</span>
+                  </div>
+                  <div class="delta-content">${escapeHtml(d.content)}</div>
+                </div>`
+              )
+              .join("")}
+          </div>`;
+      }
+
+      let qaHtml = "";
+      if (qaItems.length > 0) {
+        qaHtml = `
+          <div class="knowledge-subsection egg-qa-block">
+            <div class="knowledge-subhead qa-subhead">💬 Key Questions for this Egg (${qaItems.length})</div>
+            ${qaItems
+              .map(
+                (qa) => `
+                <div class="qa-item">
+                  <div class="qa-question">Q: ${escapeHtml(qa.question)}</div>
+                  <div class="qa-answer">${escapeHtml(qa.answer)}</div>
+                </div>`
+              )
+              .join("")}
+          </div>`;
+      }
+
+      let redundantHtml = "";
+      if (redundantDeltas.length > 0) {
+        redundantHtml = `
+          <div class="existing-tree-container">
+            <div class="existing-tree-header">
+              <span class="existing-tree-title">✅ Already Covered in Tree (${redundantDeltas.length})</span>
+              <button type="button" class="covered-toggle">▸ View Covered</button>
+            </div>
+            <div class="covered-body hidden">
               ${redundantDeltas
-                .map((d) => `
+                .map(
+                  (d) => `
                   <div class="delta-item is-covered">
                     <div class="delta-header">
                       <span class="delta-badge badge-covered">Covered</span>
                       <span class="delta-parent">${d.existingParent ? `under: <strong>${escapeHtml(d.existingParent)}</strong>` : "Already known"}</span>
                     </div>
                     <div class="delta-content">${escapeHtml(d.content)}</div>
-                  </div>`)
+                  </div>`
+                )
                 .join("")}
-            </div>`;
-        }
-
-        let treeHtml = "";
-        if (existingKnowledge) {
-          treeHtml = `
-            <div class="existing-tree-container">
-              <div class="existing-tree-header">
-                <span class="existing-tree-title">📚 Current Knowledge in Egg</span>
-                <button type="button" class="existing-tree-toggle">▸ View Tree</button>
-              </div>
-              <div class="existing-tree-body hidden">${escapeHtml(existingKnowledge)}</div>
-            </div>`;
-        }
-
-        return `
-          <div class="egg-group">
-            <div class="knowledge-egg">📄 ${escapeHtml(r.egg)}</div>
-            ${newHtml}
-            ${redundantHtml}
-            ${treeHtml}
+            </div>
           </div>`;
-      })
-      .join("");
+      }
 
-    // Wire tree toggle buttons
-    deltaList.querySelectorAll(".existing-tree-toggle").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const body = btn.closest(".existing-tree-container")?.querySelector(".existing-tree-body");
-        if (body) {
-          const isHidden = body.classList.toggle("hidden");
-          btn.textContent = isHidden ? "▸ View Tree" : "▾ Hide Tree";
-        }
-      });
+      let treeHtml = "";
+      if (existingKnowledge) {
+        treeHtml = `
+          <div class="existing-tree-container">
+            <div class="existing-tree-header">
+              <span class="existing-tree-title">📚 Current Knowledge in Egg</span>
+              <button type="button" class="existing-tree-toggle">▸ View Tree</button>
+            </div>
+            <div class="existing-tree-body hidden">${escapeHtml(existingKnowledge)}</div>
+          </div>`;
+      }
+
+      return `
+        <div class="egg-card${hideClass}" data-egg="${escapeHtml(r.egg)}">
+          ${statusHeader}
+          ${statusNote}
+          ${newHtml}
+          ${qaHtml}
+          ${redundantHtml}
+          ${treeHtml}
+        </div>`;
+    })
+    .join("");
+
+  // Wire covered toggles
+  eggKnowledgeContent.querySelectorAll(".covered-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const body = btn.closest(".existing-tree-container")?.querySelector(".covered-body");
+      if (body) {
+        const isHidden = body.classList.toggle("hidden");
+        btn.textContent = isHidden ? "▸ View Covered" : "▾ Hide Covered";
+      }
     });
-  } else {
-    deltaSection.classList.add("hidden");
-    deltaList.innerHTML = "";
-  }
+  });
 
-  // Verdict
-  if (result.shouldRead) {
-    verdictIcon.textContent = "✅";
-    verdictText.textContent = "Worth reading";
-    verdictBadge.className = "verdict-badge verdict-yes";
-  } else {
-    verdictIcon.textContent = "⏭️";
-    verdictText.textContent = "Skip it";
-    verdictBadge.className = "verdict-badge verdict-no";
-  }
-  verdictReason.textContent = result.shouldReadReason || "";
-
-  successBanner.classList.add("hidden");
-  updateActionButtons();
+  // Wire tree toggles
+  eggKnowledgeContent.querySelectorAll(".existing-tree-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const body = btn.closest(".existing-tree-container")?.querySelector(".existing-tree-body");
+      if (body) {
+        const isHidden = body.classList.toggle("hidden");
+        btn.textContent = isHidden ? "▸ View Tree" : "▾ Hide Tree";
+      }
+    });
+  });
 }
 
 /** Reflect nutCollected/eggHatched in the two action buttons. */
 function updateActionButtons() {
+  if (analysisResult?.stage === "stage1") {
+    confirmBtn.classList.add("hidden");
+    if (nutCollected) {
+      collectNutBtn.disabled = true;
+      collectNutBtn.textContent = "✅ Nut collected";
+      if (stage1SkipBtn) {
+        stage1SkipBtn.disabled = true;
+        stage1SkipBtn.textContent = "✅ Nut Collected";
+      }
+      const confirmTextEl = document.getElementById("stage1-confirm-text");
+      const confirmIconEl = document.querySelector(".stage1-confirm-icon");
+      if (confirmTextEl) {
+        confirmTextEl.innerHTML = "<strong>Nut collected to vault!</strong> Raw content saved. You can still hatch the egg below if you want.";
+      }
+      if (confirmIconEl) {
+        confirmIconEl.textContent = "✅";
+      }
+      if (stage1ConfirmBox) {
+        stage1ConfirmBox.classList.add("stage1-saved");
+      }
+    } else {
+      collectNutBtn.disabled = false;
+      collectNutBtn.textContent = "🌰 Collect Nut Only";
+      if (stage1SkipBtn) {
+        stage1SkipBtn.disabled = false;
+        stage1SkipBtn.textContent = "🌰 Collect Nut Only";
+      }
+      if (stage1ConfirmBox) {
+        stage1ConfirmBox.classList.remove("stage1-saved");
+      }
+    }
+    return;
+  }
+
   if (nutCollected) {
     collectNutBtn.disabled = true;
     collectNutBtn.textContent = "✅ Nut collected";
   } else {
     collectNutBtn.disabled = false;
-    collectNutBtn.textContent = "🥜 Collect Nut";
+    collectNutBtn.textContent = "🌰 Collect Nut";
   }
 
   const hasDelta = (analysisResult?.newKnowledge?.length || 0) > 0;
@@ -1134,13 +1581,13 @@ function updateActionButtons() {
   } else if (hasDelta) {
     confirmBtn.classList.remove("hidden");
     confirmBtn.disabled = false;
-    confirmBtn.textContent = "🥚 Hatch Egg";
+    confirmBtn.textContent = "🐣 Hatch Egg";
     confirmBtn.title = "";
   } else {
     // No novel delta — show the button but keep it unclickable
     confirmBtn.classList.remove("hidden");
     confirmBtn.disabled = true;
-    confirmBtn.textContent = "🥚 Hatch Egg";
+    confirmBtn.textContent = "🐣 Hatch Egg";
     confirmBtn.title = "No new knowledge found to add";
   }
 }
@@ -1177,6 +1624,20 @@ function showHistoryEntry(entry) {
   eggHatched = cachedProcessedSaved === "saved";
   currentNutId = entry.nutId ?? null;
   analysisResult = entry.result;
+
+  if (entry.content && !extractedContent) {
+    extractedContent = {
+      url: entry.url || pageUrl.textContent || "",
+      title: entry.title || "",
+      content: entry.content,
+      sourceType: entry.sourceType || "webpage",
+      metadata: {
+        ...(entry.author ? { author: entry.author } : {}),
+        ...(entry.publishedAt ? { published: entry.publishedAt } : {}),
+      },
+    };
+  }
+
   // Stored provenance from the DB row, falling back to the live extraction
   const live = provenanceFromExtraction();
   showResultsState(entry.result, {
@@ -1324,6 +1785,7 @@ function showCaptureState() {
   nutCollected = false;
   eggHatched = false;
   currentNutId = null;
+  activeEggTab = null;
   hideMessages();
 }
 
@@ -1338,7 +1800,7 @@ async function handleConfirm() {
   }
   confirmBtn.disabled = true;
   confirmBtn.textContent = "Hatching...";
-  await doSave(analysisResult.newKnowledge || []);
+  await doSave(analysisResult.newKnowledge || [], true);
   updateActionButtons();
 }
 
@@ -1347,21 +1809,34 @@ async function handleConfirm() {
 async function handleSaveRaw() {
   if (nutCollected) return; // already collected — no duplicate work
   if (!extractedContent) {
-    collectNutBtn.disabled = true;
-    collectNutBtn.textContent = "Retrieving…";
+    if (collectNutBtn) {
+      collectNutBtn.disabled = true;
+      collectNutBtn.textContent = "Retrieving…";
+    }
+    if (stage1SkipBtn) {
+      stage1SkipBtn.disabled = true;
+      stage1SkipBtn.textContent = "Retrieving…";
+    }
     await extractPageContent();
   }
   if (!extractedContent) {
     showError("Could not extract page content to save.");
+    updateActionButtons();
     return;
   }
-  collectNutBtn.disabled = true;
-  collectNutBtn.textContent = "Collecting...";
-  await doSave([]);
+  if (collectNutBtn) {
+    collectNutBtn.disabled = true;
+    collectNutBtn.textContent = "Collecting...";
+  }
+  if (stage1SkipBtn) {
+    stage1SkipBtn.disabled = true;
+    stage1SkipBtn.textContent = "Collecting...";
+  }
+  await doSave([], false);
   updateActionButtons();
 }
 
-async function doSave(newKnowledge) {
+async function doSave(newKnowledge, isHatch = false) {
   try {
     if (!extractedContent) {
       await extractPageContent();
@@ -1380,14 +1855,14 @@ async function doSave(newKnowledge) {
       // Hatching collects the nut too — skip the raw save only when the
       // nut was already collected (this session or a previous one).
       // "analyzed" means processed but never saved, so the raw must be saved.
-      skipRaw: newKnowledge.length > 0 &&
+      skipRaw: (newKnowledge.length > 0 || isHatch) &&
         (nutCollected || (cachedProcessedSaved !== null && cachedProcessedSaved !== "analyzed")),
     };
 
     const response = await chrome.runtime.sendMessage({ action: "confirm", payload });
 
     if (response?.success) {
-      if (newKnowledge.length > 0) {
+      if (newKnowledge.length > 0 || isHatch) {
         // Hatching the egg collects the nut as well
         eggHatched = true;
         nutCollected = true;
@@ -1396,18 +1871,30 @@ async function doSave(newKnowledge) {
       }
       // Keep the capture history entry in sync with the new save state
       const entry = captureHistory.find((h) => h.nutId === currentNutId);
-      if (entry) entry.saved = newKnowledge.length > 0 ? "saved" : "skip";
+      if (entry) entry.saved = (newKnowledge.length > 0 || isHatch) ? "saved" : "skip";
       const merged = response?.merged || [];
       const mergedNote = merged.length > 0
         ? ` 🧹 ${merged
             .map((m) => `${m.entries} unprocessed entries merged into ${m.egg}`)
             .join(", ")}`
         : "";
-      successMessage.textContent = newKnowledge.length > 0
-        ? `Egg hatched — knowledge added and nut collected!${mergedNote}`
-        : "Nut collected!";
-      successBanner.classList.remove("hidden");
+      const isStage1BoxVisible = analysisResult?.stage === "stage1" && stage1ConfirmBox && !stage1ConfirmBox.classList.contains("hidden");
+      if (isStage1BoxVisible) {
+        // In Stage 1, stage1-confirm-box updates in-place to show the saved state.
+        // Hide successBanner so only one message is displayed.
+        successBanner.classList.add("hidden");
+      } else {
+        if (newKnowledge.length > 0) {
+          successMessage.textContent = `Egg hatched — knowledge added and nut collected!${mergedNote}`;
+        } else if (isHatch) {
+          successMessage.textContent = `Egg hatched — nut collected! (No new knowledge needed to add)`;
+        } else {
+          successMessage.textContent = "Nut collected to Obsidian vault!";
+        }
+        successBanner.classList.remove("hidden");
+      }
       updateActionButtons();
+      fetchMetrics();
     } else {
       showError(response?.error || "Failed to save");
     }
