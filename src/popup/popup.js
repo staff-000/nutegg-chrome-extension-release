@@ -121,6 +121,18 @@ let analysisMode = "fast";
 let stage1Payload = null;
 let stage1ContentAnalysis = null;
 let activeEggTab = null;
+let currentTabLoading = false;
+
+/** Per-tab cache of extraction/analysis results. When the user switches away
+ *  and back, the cached result is restored instead of re-extracting. */
+const tabResultCache = new Map();
+
+/** Per-tab extraction sequence numbers. Allows background tab extractions to complete
+ *  and cache cleanly without being aborted when the active tab switches. */
+const tabExtractSeq = new Map();
+
+/** Set of tab IDs currently executing an extraction. */
+const tabsExtracting = new Set();
 
 // --- Init ---
 
@@ -152,21 +164,57 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   modeFastBtn?.addEventListener("click", () => setAnalysisMode("fast"));
   modeConfirmBtn?.addEventListener("click", () => setAnalysisMode("confirm"));
-  stage1ProceedBtn?.addEventListener("click", () => handleProceedStage2(null, true));
+  stage1ProceedBtn?.addEventListener("click", () => handleProceedStage2(null, true, false, activeTabId));
   stage1SkipBtn?.addEventListener("click", handleSaveRaw);
 
-  analyzeBtn.addEventListener("click", () => handleAnalyze(true));
+  analyzeBtn.addEventListener("click", () => {
+    const notReady = getAnalyzeNotReadyReason();
+    if (notReady) {
+      showWarning(notReady);
+      return;
+    }
+    handleAnalyze(true);
+  });
   confirmBtn.addEventListener("click", handleConfirm);
   collectNutBtn.addEventListener("click", handleSaveRaw);
   discardBtn.addEventListener("click", handleDiscard);
-  backBtn.addEventListener("click", () => {
+  backBtn.addEventListener("click", async () => {
     showCaptureState();
-    if (!extractedContent) {
-      extractPageContent();
+    let currentTabUrl = "";
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      currentTabUrl = tab?.url || "";
+    } catch {}
+
+    const urlMatches = extractedContent?.url && currentTabUrl &&
+      extractedContent.url.split("#")[0] === currentTabUrl.split("#")[0];
+
+    if (urlMatches && extractedContent?.content) {
+      contentPreview.textContent = extractedContent.content;
+      pageTitle.textContent = extractedContent.title || pageTitle.textContent;
+      pageUrl.textContent = extractedContent.url || pageUrl.textContent;
+      pageType.textContent = extractedContent.sourceType || pageType.textContent;
+      showProvenance(extractedContent.metadata || {});
+      updateAnalyzeButtonsState();
+    } else {
+      extractedContent = null;
+      contentPreview.textContent = "Retrieving content…";
+      await extractPageContent();
     }
   });
   settingsBtn.addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
+  });
+  const reportBugLink = document.getElementById("report-bug-link");
+  reportBugLink?.addEventListener("click", (e) => {
+    e.preventDefault();
+    openGitHubBugReport();
+  });
+  const errorReportBug = document.getElementById("error-report-bug");
+  errorReportBug?.addEventListener("click", (e) => {
+    e.preventDefault();
+    const errMsg = errorMessage?.textContent || "";
+    openGitHubBugReport(errMsg);
   });
   if (aiCreditPill) {
     aiCreditPill.addEventListener("click", () => {
@@ -211,12 +259,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   eggsCreateBtn.addEventListener("click", handleCreateEggInline);
   reanalyzeEggsBtn.addEventListener("click", async () => {
     if (selectedEggs.size === 0 || reanalyzeEggsBtn.disabled) return;
+    const notReady = getAnalyzeNotReadyReason();
+    if (notReady) {
+      showWarning(notReady);
+      return;
+    }
     reanalyzeEggsBtn.disabled = true;
     const original = reanalyzeEggsBtn.textContent;
     reanalyzeEggsBtn.textContent = "⏳ Analyzing…";
     eggsErrorEl.classList.add("hidden");
     if (stage1ContentAnalysis) {
-      await handleProceedStage2([...selectedEggs], false);
+      await handleProceedStage2([...selectedEggs], false, false, activeTabId);
     } else {
       const error = await handleAnalyze(true, [...selectedEggs], true);
       if (error) {
@@ -232,7 +285,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     const expanded = eggsExpanded.classList.toggle("hidden");
     eggsToggleChevron.textContent = expanded ? "▾" : "▸";
   });
-  reanalyzeBtn.addEventListener("click", () => handleAnalyze(true, null, true));
+  reanalyzeBtn.addEventListener("click", () => {
+    const notReady = getAnalyzeNotReadyReason();
+    if (notReady) {
+      showWarning(notReady);
+      return;
+    }
+    handleAnalyze(true, null, true);
+  });
   historySelect.addEventListener("change", () => {
     const idx = parseInt(historySelect.value, 10);
     if (captureHistory[idx]) showHistoryEntry(captureHistory[idx]);
@@ -240,7 +300,36 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // The side panel persists across tabs — refresh content when the user
   // switches to another tab or the active tab navigates to a new URL.
-  chrome.tabs.onActivated.addListener(() => refreshForCurrentTab());
+  chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+    if (activeTabId && activeTabId !== tabId && extractedContent) {
+      const prevCache = tabResultCache.get(activeTabId) || {};
+      tabResultCache.set(activeTabId, {
+        ...prevCache,
+        extractedContent,
+        analysisResult,
+        captureHistory: [...captureHistory],
+        currentNutId,
+        stage1Payload,
+        stage1ContentAnalysis,
+        eggHatched,
+        nutCollected,
+      });
+    }
+    activeTabId = tabId;
+    // Check if we have cached results for this tab
+    const cached = tabResultCache.get(tabId);
+    if (cached && (cached.analysisResult || cached.status === "analyzing" || cached.status === "hatching" || cached.extractedContent)) {
+      restoreFromTabCache(tabId, cached);
+    } else if (tabsExtracting.has(tabId)) {
+      // Tab is currently retrieving in the background — show retrieving state and let it finish
+      contentPreview.textContent = "Retrieving content…";
+      pageAuthorEl.textContent = "";
+      pagePublishedEl.textContent = "";
+      updateAnalyzeButtonsState();
+    } else {
+      refreshForCurrentTab();
+    }
+  });
   // Reopen handling: browsers that keep the side-panel document alive while
   // the panel is closed don't re-fire DOMContentLoaded. Refresh on show —
   // but only when the displayed content belongs to a DIFFERENT tab. Plain
@@ -250,24 +339,88 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (document.visibilityState !== "visible") return;
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id != null && tab.id !== activeTabId) refreshForCurrentTab();
+      if (tab?.id != null && tab.id !== activeTabId) {
+        if (activeTabId && extractedContent) {
+          const prevCache = tabResultCache.get(activeTabId) || {};
+          tabResultCache.set(activeTabId, {
+            ...prevCache,
+            extractedContent,
+            analysisResult,
+            captureHistory: [...captureHistory],
+            currentNutId,
+            stage1Payload,
+            stage1ContentAnalysis,
+            eggHatched,
+            nutCollected,
+          });
+        }
+        activeTabId = tab.id;
+        const cached = tabResultCache.get(tab.id);
+        if (cached && (cached.analysisResult || cached.status === "analyzing" || cached.status === "hatching" || cached.extractedContent)) {
+          restoreFromTabCache(tab.id, cached);
+        } else if (tabsExtracting.has(tab.id)) {
+          contentPreview.textContent = "Retrieving content…";
+          pageAuthorEl.textContent = "";
+          pagePublishedEl.textContent = "";
+          updateAnalyzeButtonsState();
+        } else {
+          refreshForCurrentTab();
+        }
+      }
     } catch {
       // tabs API unavailable — leave the current state alone
     }
   });
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
-    // Page finished loading: retry extraction when it ran mid-load or failed
-    // (e.g. YouTube captions not ready yet).
-    if (changeInfo.status === "complete") {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id === tabId && (lastLoadWasLoading || extractionFailed)) {
-        refreshForCurrentTab();
+    let isActiveTab = false;
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      isActiveTab = activeTab?.id === tabId;
+    } catch {}
+
+    if (changeInfo.status === "loading") {
+      if (isActiveTab) {
+        currentTabLoading = true;
+        updateAnalyzeButtonsState();
       }
       return;
     }
-    if (!changeInfo.url) return;
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id === tabId) refreshForCurrentTab();
+
+    // Page finished loading:
+    if (changeInfo.status === "complete") {
+      if (isActiveTab) {
+        currentTabLoading = false;
+        if (!extractedContent || lastLoadWasLoading || extractionFailed) {
+          refreshForCurrentTab();
+        } else {
+          updateAnalyzeButtonsState();
+        }
+      } else {
+        // Background tab finished loading — extract in background if not already cached
+        const cached = tabResultCache.get(tabId);
+        if (!cached?.extractedContent && !cached?.analysisResult && !cached?.status && !tabsExtracting.has(tabId)) {
+          extractPageContent(refreshSeq, tabId);
+        }
+      }
+      return;
+    }
+
+    if (changeInfo.url) {
+      // URL changed — invalidate its cache
+      tabResultCache.delete(tabId);
+      tabExtractSeq.delete(tabId);
+      tabsExtracting.delete(tabId);
+      if (isActiveTab) {
+        refreshForCurrentTab();
+      }
+    }
+  });
+
+  // Clean up cache when tabs are closed
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    tabResultCache.delete(tabId);
+    tabExtractSeq.delete(tabId);
+    tabsExtracting.delete(tabId);
   });
 
   await refreshForCurrentTab();
@@ -291,17 +444,23 @@ async function refreshForCurrentTab(forceExtract = false) {
   historySelect.classList.add("hidden");
   historySelect.innerHTML = "";
   captureHistory = []; // fresh URL — old history doesn't apply
-  // Drop the previous tab's content too — if the new tab can't be extracted
-  // (restricted page, PDF, ...), a stale url must not re-render old results
-  // via loadHistoryIfAny or re-apply the old transcript warning.
   extractedContent = null;
-  analyzeBtn.disabled = true;
-  analyzeBtnText.textContent = "Analyze";
+  contentPreview.textContent = "Loading content…";
+  pageAuthorEl.textContent = "";
+  pagePublishedEl.textContent = "";
+  currentTabLoading = false;
+  updateAnalyzeButtonsState();
 
   let tabUrl = "";
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id != null) activeTabId = tab.id;
+    if (tab?.id != null) {
+      activeTabId = tab.id;
+      if (forceExtract) {
+        tabResultCache.delete(tab.id);
+      }
+    }
+    if (tab?.status === "loading") currentTabLoading = true;
     if (tab?.url) {
       tabUrl = tab.url;
       pageTitle.textContent = tab.title || "Loading...";
@@ -309,6 +468,8 @@ async function refreshForCurrentTab(forceExtract = false) {
       pageType.textContent = detectPageTypeFromUrl(tab.url);
     }
   } catch {}
+
+  updateAnalyzeButtonsState();
 
   if (seq !== refreshSeq) return;
 
@@ -325,6 +486,7 @@ async function refreshForCurrentTab(forceExtract = false) {
       await fetchMetrics();
       if (seq !== refreshSeq) return;
       await fetchEggs();
+      updateAnalyzeButtonsState();
       return;
     }
   }
@@ -341,10 +503,7 @@ async function refreshForCurrentTab(forceExtract = false) {
     if (seq !== refreshSeq) return;
     await fetchEggs();
     if (seq !== refreshSeq) return;
-    if (extractedContent && !isTranscriptBlocked()) {
-      analyzeBtn.disabled = false;
-      analyzeBtnText.textContent = "Analyze";
-    }
+    updateAnalyzeButtonsState();
     // Fallback: check if the canonical/cleaned extracted URL has history
     if (extractedContent?.url && extractedContent.url !== tabUrl) {
       await loadHistoryIfAny(seq, extractedContent.url);
@@ -352,9 +511,99 @@ async function refreshForCurrentTab(forceExtract = false) {
   }
 }
 
-/** 🔄 Refresh button — no-op while a retrieval is already in flight. */
+/**
+ * Restore the UI from a cached tab result (extraction + analysis).
+ * Called when the user switches back to a tab that was previously analyzed or in-flight.
+ */
+async function restoreFromTabCache(tabId, cached) {
+  const seq = ++refreshSeq;
+  activeTabId = tabId;
+  extractedContent = cached.extractedContent;
+  analysisResult = cached.analysisResult;
+  captureHistory = cached.captureHistory || [];
+  currentNutId = cached.currentNutId || (cached.captureHistory?.[0]?.nutId ?? null);
+  stage1Payload = cached.stage1Payload || stage1Payload;
+  stage1ContentAnalysis = cached.stage1ContentAnalysis || stage1ContentAnalysis;
+  currentTabLoading = false;
+
+  // Update header and capture preview so capture state is ready if user switches back
+  pageTitle.textContent = extractedContent?.title || "Untitled";
+  pageUrl.textContent = extractedContent?.url || "";
+  pageType.textContent = extractedContent?.sourceType || "";
+  contentPreview.textContent = extractedContent?.content || "(No content extracted)";
+  showProvenance(extractedContent?.metadata || {});
+
+  if (cached.status === "analyzing") {
+    if (cached.analysisResult) {
+      // Re-analysis in flight: keep showing results view with analyzing indicator
+      showResultsState(cached.analysisResult, provenanceFromExtraction(extractedContent));
+      if (reanalyzeBtn) {
+        reanalyzeBtn.disabled = true;
+        reanalyzeBtn.textContent = "Analyzing…";
+      }
+      if (historySelect) historySelect.disabled = true;
+      analyzeBtn.disabled = true;
+      analyzeBtnText.textContent = "Analyzing...";
+      processedNote.classList.remove("hidden");
+      processedMessage.textContent = "Analyzing content…";
+    } else {
+      showCaptureState();
+      if (extractedContent) {
+        contentPreview.textContent = extractedContent.content || "(No content extracted)";
+      }
+      analyzeBtn.disabled = true;
+      analyzeBtnText.textContent = "Analyzing...";
+    }
+  } else if (cached.status === "hatching") {
+    if (analysisResult) {
+      showResultsState(analysisResult, provenanceFromExtraction(extractedContent));
+    }
+    if (stage1ProceedBtn) {
+      stage1ProceedBtn.disabled = true;
+      stage1ProceedBtn.textContent = "Hatching the egg…";
+    }
+    if (reanalyzeBtn) {
+      reanalyzeBtn.disabled = true;
+      reanalyzeBtn.textContent = "Comparing knowledge…";
+    }
+    if (historySelect) historySelect.disabled = true;
+    analyzeBtn.disabled = true;
+    analyzeBtnText.textContent = "Analyzing...";
+  } else if (analysisResult) {
+    if (cached.eggHatched) eggHatched = true;
+    if (cached.nutCollected) nutCollected = true;
+    showResultsState(analysisResult, provenanceFromExtraction(extractedContent));
+    updateAnalyzeButtonsState();
+    if (historySelect) historySelect.disabled = false;
+    if (cached.eggHatched) updateActionButtons();
+    if (captureHistory.length > 0) {
+      const entry = (currentNutId != null && captureHistory.find((h) => String(h.nutId) === String(currentNutId))) || captureHistory[0];
+      const when = new Date(entry.capturedAt).toLocaleString();
+      const stateLabel = entry.saved === "saved"
+        ? "saved" : entry.saved === "skip" ? "collected" : "analyzed";
+      if (cached.justReanalyzed) {
+        processedMessage.textContent = "Re-analyzed just now — showing fresh result.";
+        delete cached.justReanalyzed;
+      } else {
+        processedMessage.textContent = `Captured ${when} (${stateLabel}) — showing stored result.`;
+      }
+      processedNote.classList.remove("hidden");
+      renderHistorySelect(currentNutId);
+    }
+  } else {
+    showCaptureState();
+    updateAnalyzeButtonsState();
+  }
+
+  // Refresh server status and eggs without resetting content
+  await checkServerStatus();
+  if (serverOnline) {
+    await fetchEggs();
+  }
+}
+
+/** 🔄 Refresh button — cancels any in-flight retrieval on current tab and starts fresh. */
 async function handleRefresh() {
-  if (extractionPending) return; // still retrieving — do nothing
   await refreshForCurrentTab(true);
 }
 
@@ -584,66 +833,188 @@ function updateStage1ProceedBtn() {
   }
 }
 
-async function handleProceedStage2(eggsToCompare = null, autoSave = false, skipScroll = false) {
+async function handleProceedStage2(
+  eggsToCompare = null,
+  autoSave = false,
+  skipScroll = false,
+  pinnedTabId = null,
+  contentAnalysis = null,
+  basePayload = null,
+  contentForProvenance = null
+) {
+  const targetPinnedId = pinnedTabId || activeTabId;
+  const isPinnedActive = activeTabId === targetPinnedId;
+
   const isExplicitEggs = Array.isArray(eggsToCompare);
   const targetEggs = isExplicitEggs ? eggsToCompare : [...selectedEggs];
   if (!isExplicitEggs && targetEggs.length === 0) {
-    if (eggsExpanded) eggsExpanded.classList.remove("hidden");
-    if (eggsToggleChevron) eggsToggleChevron.textContent = "▾";
-    const eggSec = document.getElementById("eggs-section");
-    if (eggSec) eggSec.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    showWarning("Please select or create at least one egg to hatch.");
+    if (isPinnedActive) {
+      if (eggsExpanded) eggsExpanded.classList.remove("hidden");
+      if (eggsToggleChevron) eggsToggleChevron.textContent = "▾";
+      const eggSec = document.getElementById("eggs-section");
+      if (eggSec) eggSec.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      showWarning("Please select or create at least one egg to hatch.");
+    }
     return;
   }
 
-  if (stage1ProceedBtn) {
-    stage1ProceedBtn.disabled = true;
-    stage1ProceedBtn.textContent = autoSave ? "Hatching the egg…" : "Analyzing egg…";
+  if (isPinnedActive) {
+    if (stage1ProceedBtn) {
+      stage1ProceedBtn.disabled = true;
+      stage1ProceedBtn.textContent = autoSave ? "Hatching the egg…" : "Analyzing egg…";
+    }
+    hideMessages();
   }
-  hideMessages();
 
   try {
+    const cached = targetPinnedId ? tabResultCache.get(targetPinnedId) : null;
+    const base = basePayload || stage1Payload || cached?.stage1Payload;
+    const content = contentForProvenance || extractedContent || cached?.extractedContent;
+    const analysis = contentAnalysis || stage1ContentAnalysis || cached?.stage1ContentAnalysis || analysisResult;
+
+    if (targetPinnedId) {
+      const existing = tabResultCache.get(targetPinnedId) || {};
+      tabResultCache.set(targetPinnedId, {
+        ...existing,
+        status: "hatching",
+        stage1Payload: base,
+        stage1ContentAnalysis: analysis,
+      });
+    }
+
+    const url = base?.url || content?.url || pageUrl?.textContent || "";
+    const title = base?.title || content?.title || pageTitle?.textContent || "";
+    const bodyContent = base?.content || content?.content || "";
+    const sourceType = base?.sourceType || content?.sourceType || "generic";
+    const metadata = base?.metadata || content?.metadata;
+    const chapters = base?.chapters || content?.chapters;
+    const questions = base?.questions || (customQuestionsEl?.value ? customQuestionsEl.value.split("\n").map((q) => q.trim()).filter(Boolean) : []);
+
     const payload = {
-      ...stage1Payload,
+      ...(base || {}),
+      url,
+      title,
+      content: bodyContent,
+      sourceType,
+      metadata,
+      chapters,
+      questions,
       stage: 2,
       eggs: targetEggs,
-      contentAnalysis: stage1ContentAnalysis || {
-        titleVerdict: analysisResult?.titleVerdict || "",
-        coreSummary: analysisResult?.coreSummary || [],
-        isLongForm: analysisResult?.isLongForm || false,
-        chapterMap: analysisResult?.chapterMap || [],
-        customQuestionAnswers: analysisResult?.customQuestionAnswers || [],
+      nutId: base?.nutId || currentNutId || undefined,
+      contentAnalysis: analysis || {
+        titleVerdict: title,
+        coreSummary: [],
+        isLongForm: false,
+        chapterMap: [],
+        customQuestionAnswers: [],
       },
     };
 
-    const response = await chrome.runtime.sendMessage({ action: "analyze", payload });
+    const response = await sendAnalyzeViaPort(payload);
     if (response?.error) {
-      showError(response.error, response.errorCode);
-      if (stage1ProceedBtn) {
-        stage1ProceedBtn.disabled = false;
-        updateStage1ProceedBtn();
+      if (targetPinnedId) tabResultCache.delete(targetPinnedId);
+      if (activeTabId === targetPinnedId) {
+        showError(response.error, response.errorCode);
+        if (stage1ProceedBtn) {
+          stage1ProceedBtn.disabled = false;
+          updateStage1ProceedBtn();
+        }
       }
       return;
     }
 
-    if (response.nutId) {
-      currentNutId = response.nutId;
-      cachedProcessedSaved = null;
-      captureHistory = [
-        {
-          nutId: response.nutId,
-          capturedAt: new Date().toISOString(),
-          saved: "analyzed",
-          result: response,
-        },
-        ...captureHistory,
-      ];
+    response.stage = "stage2";
+    const newNutId = response.nutId || null;
+
+    if (autoSave) {
+      await doSave(
+        response.newKnowledge || [],
+        true,
+        content,
+        response,
+        newNutId,
+        targetPinnedId
+      );
     }
 
-    response.stage = "stage2";
-    showResultsState(response, provenanceFromExtraction());
+    let freshHistory = null;
+    if (payload.url && serverOnline) {
+      try {
+        const histResp = await chrome.runtime.sendMessage({
+          action: "history",
+          url: payload.url,
+        });
+        if (histResp?.history?.length) {
+          freshHistory = histResp.history;
+        }
+      } catch {
+        // Fall back to constructed entry
+      }
+    }
+
+    const newHistoryEntry = newNutId
+      ? {
+          nutId: newNutId,
+          capturedAt: new Date().toISOString(),
+          saved: (autoSave || (response.newKnowledge && response.newKnowledge.length > 0)) ? "saved" : "analyzed",
+          result: response,
+          url: payload.url || content?.url || "",
+          title: payload.title || content?.title || "",
+          content: payload.content || content?.content || "",
+          sourceType: payload.sourceType || content?.sourceType || "webpage",
+          author: payload.metadata?.author || "",
+          publishedAt: payload.metadata?.published || "",
+        }
+      : null;
+
+    if (targetPinnedId) {
+      const existing = tabResultCache.get(targetPinnedId) || {};
+      const updatedHistory = freshHistory || (newHistoryEntry
+        ? [newHistoryEntry, ...(existing.captureHistory || [])]
+        : existing.captureHistory || []);
+      tabResultCache.set(targetPinnedId, {
+        ...existing,
+        status: "done",
+        url: payload.url,
+        extractedContent: contentForProvenance || existing.extractedContent || extractedContent,
+        analysisResult: response,
+        stage1Payload: base,
+        stage1ContentAnalysis: analysis,
+        eggHatched: autoSave ? true : (existing.eggHatched || false),
+        nutCollected: autoSave ? true : (existing.nutCollected || false),
+        currentNutId: newNutId || existing.currentNutId,
+        captureHistory: updatedHistory,
+        justReanalyzed: isReanalyzing || existing.isReanalyzing,
+      });
+    }
+
+    // Only update active UI if the user is currently looking at the analyzed tab
+    if (activeTabId !== targetPinnedId) {
+      return;
+    }
+
+    if (newNutId) {
+      currentNutId = newNutId;
+      cachedProcessedSaved = null;
+      captureHistory = freshHistory || (newHistoryEntry ? [newHistoryEntry, ...captureHistory] : captureHistory);
+    } else if (freshHistory) {
+      captureHistory = freshHistory;
+    }
+
+    showResultsState(response, provenanceFromExtraction(contentForProvenance));
     if (autoSave) {
-      await doSave(response.newKnowledge || [], true);
+      eggHatched = true;
+      nutCollected = true;
+      updateActionButtons();
+      fetchMetrics();
+    }
+    if (captureHistory.length > 0) {
+      renderHistorySelect(currentNutId);
+      if (isReanalyzing) {
+        processedMessage.textContent = "Re-analyzed just now — showing fresh result.";
+        processedNote.classList.remove("hidden");
+      }
     }
     if (!skipScroll) {
       setTimeout(() => {
@@ -656,10 +1027,12 @@ async function handleProceedStage2(eggsToCompare = null, autoSave = false, skipS
       }, 100);
     }
   } catch (err) {
-    showError(err instanceof Error ? err.message : "Hatching failed");
-    if (stage1ProceedBtn) {
-      stage1ProceedBtn.disabled = false;
-      updateStage1ProceedBtn();
+    if (activeTabId === targetPinnedId) {
+      showError(err instanceof Error ? err.message : "Hatching failed");
+      if (stage1ProceedBtn) {
+        stage1ProceedBtn.disabled = false;
+        updateStage1ProceedBtn();
+      }
     }
   }
 }
@@ -681,11 +1054,50 @@ async function fetchMetrics() {
 
 // --- Config & Credit status ---
 
+let obsidianPluginVersion = null;
+
+function updateVersionDisplay(pluginVersion) {
+  const versionTag = document.getElementById("version-tag");
+  const extVersion = chrome.runtime?.getManifest?.()?.version;
+  if (!versionTag || !extVersion) return;
+
+  if (pluginVersion && pluginVersion !== extVersion) {
+    versionTag.textContent = `NutEgg v${extVersion} (Obsidian v${pluginVersion})`;
+    versionTag.title = `Version mismatch: Chrome extension is v${extVersion}, but Obsidian plugin is v${pluginVersion}`;
+    versionTag.style.color = "#d97706";
+  } else {
+    versionTag.textContent = `NutEgg v${extVersion}`;
+    versionTag.title = pluginVersion
+      ? `NutEgg v${extVersion} (Obsidian plugin v${pluginVersion})`
+      : `NutEgg v${extVersion}`;
+    versionTag.style.color = "";
+  }
+}
+
+function getVersionMismatchIssue(pluginVersion) {
+  const extVersion = chrome.runtime?.getManifest?.()?.version;
+  if (pluginVersion && extVersion && pluginVersion !== extVersion) {
+    return `Version mismatch: Chrome extension is v${extVersion}, but Obsidian plugin is v${pluginVersion}. Please update both to the same version for full compatibility.`;
+  }
+  return null;
+}
+
 async function checkConfigStatus() {
   try {
     const response = await chrome.runtime.sendMessage({ action: "config-status" });
-    if (response?.issues && response.issues.length > 0) {
-      showWarning(response.issues.join(" "));
+    if (response?.version) {
+      obsidianPluginVersion = response.version;
+      updateVersionDisplay(obsidianPluginVersion);
+    }
+
+    const issues = Array.isArray(response?.issues) ? [...response.issues] : [];
+    const mismatch = getVersionMismatchIssue(response?.version || obsidianPluginVersion);
+    if (mismatch && !issues.some((i) => i.includes("Version mismatch"))) {
+      issues.unshift(mismatch);
+    }
+
+    if (issues.length > 0) {
+      showWarning(issues.join(" • "));
     } else {
       hideWarning();
     }
@@ -749,39 +1161,165 @@ async function checkServerStatus() {
   try {
     const response = await chrome.runtime.sendMessage({ action: "check-server" });
     serverOnline = response?.online || false;
+    obsidianPluginVersion = response?.version || null;
   } catch {
     serverOnline = false;
+    obsidianPluginVersion = null;
   }
 
+  updateVersionDisplay(obsidianPluginVersion);
+
   if (serverOnline) {
-    serverStatus.className = "status-dot online";
-    updateServerStatusTooltip(true);
     checkCreditStatus();
     obsidianPluginLink?.classList.add("hidden");
+
+    const mismatch = getVersionMismatchIssue(obsidianPluginVersion);
+    if (mismatch) {
+      showWarning(mismatch);
+    } else {
+      updateServerStatusIndicator();
+    }
   } else {
-    serverStatus.className = "status-dot offline";
-    updateServerStatusTooltip(false);
+    updateServerStatusIndicator();
     aiCreditPill?.classList.add("hidden");
     obsidianPluginLink?.classList.remove("hidden");
   }
 }
 
-function updateServerStatusTooltip(isOnline) {
+function updateServerStatusIndicator() {
+  if (!serverOnline) {
+    serverStatus.className = "status-dot offline";
+    updateServerStatusTooltip(false);
+    return;
+  }
+
+  const hasWarning = !warningBanner.classList.contains("hidden") && (warningMessage.textContent || "").trim().length > 0;
+  if (hasWarning) {
+    serverStatus.className = "status-dot warning";
+    updateServerStatusTooltip(true, obsidianPluginVersion, warningMessage.textContent.trim());
+  } else {
+    serverStatus.className = "status-dot online";
+    updateServerStatusTooltip(true, obsidianPluginVersion, null);
+  }
+}
+
+function updateServerStatusTooltip(isOnline, pluginVersion = null, warningText = null) {
   const tooltip = document.getElementById("server-status-tooltip");
   const title = document.getElementById("status-tooltip-title");
   const sub = document.getElementById("status-tooltip-sub");
   if (!tooltip || !title || !sub) return;
 
-  if (isOnline) {
-    tooltip.className = "status-tooltip online";
-    title.textContent = "Obsidian is online";
-    sub.textContent = "Ready to capture";
-    serverStatus.setAttribute("aria-label", "Obsidian is online");
-  } else {
+  if (!isOnline) {
     tooltip.className = "status-tooltip offline";
     title.textContent = "Obsidian is offline";
     sub.textContent = "Click dot to install NutEgg plugin";
     serverStatus.setAttribute("aria-label", "Obsidian is offline. Click dot to install NutEgg plugin");
+    return;
+  }
+
+  if (warningText) {
+    tooltip.className = "status-tooltip warning";
+    title.textContent = "Obsidian online (Warning)";
+    sub.textContent = warningText;
+    serverStatus.setAttribute(
+      "aria-label",
+      `Obsidian is online with warning: ${warningText}`
+    );
+    return;
+  }
+
+  tooltip.className = "status-tooltip online";
+  title.textContent = "Obsidian is online";
+  sub.textContent = pluginVersion ? `Plugin v${pluginVersion}` : "Ready to capture";
+  serverStatus.setAttribute(
+    "aria-label",
+    `Obsidian is online${pluginVersion ? ` (v${pluginVersion})` : ""}`
+  );
+}
+
+// --- Button Readiness & State ---
+
+/**
+ * YouTube without a transcript: analysis would rely on the description only,
+ * which produces misleading answers — warn and refuse to process.
+ */
+function isTranscriptBlocked() {
+  return !!extractedContent &&
+    extractedContent.sourceType === "youtube" &&
+    extractedContent.transcriptAvailable === false;
+}
+
+function applyTranscriptBlock() {
+  if (!isTranscriptBlocked()) return;
+  updateAnalyzeButtonsState();
+  showWarning(
+    "Couldn't fetch the video transcript — analysis would be based on the description only and could mislead you. NutEgg will not process this video."
+  );
+}
+
+/** Returns a non-null string prompt if the page or content is not ready for analysis. */
+function getAnalyzeNotReadyReason() {
+  if (currentTabLoading) {
+    return "The page is still loading. Please wait until it finishes loading before analyzing.";
+  }
+  if (extractionPending) {
+    return "Retrieving page content… please wait a moment.";
+  }
+  if (!extractedContent || !extractedContent.content) {
+    return "The page is still loading or content is not ready yet. Please wait until it finishes loading.";
+  }
+  if (isTranscriptBlocked()) {
+    return "Video transcript is unavailable — NutEgg cannot analyze videos without transcripts.";
+  }
+  if (!serverOnline) {
+    return "Obsidian server is offline. Please start Obsidian with the NutEgg plugin.";
+  }
+  return null;
+}
+
+/** Updates analyze and re-analyze buttons' active / inactive visual state and labels. */
+function updateAnalyzeButtonsState() {
+  const currentTabStatus = tabResultCache.get(activeTabId)?.status;
+  const isAnalyzing = currentTabStatus === "analyzing" || currentTabStatus === "hatching";
+
+  if (isAnalyzing) {
+    analyzeBtn.disabled = true;
+    analyzeBtn.classList.remove("inactive");
+    analyzeBtnText.textContent = "Analyzing...";
+    if (reanalyzeBtn) {
+      reanalyzeBtn.disabled = true;
+      reanalyzeBtn.classList.remove("inactive");
+      reanalyzeBtn.textContent = "Analyzing…";
+    }
+    return;
+  }
+
+  analyzeBtn.disabled = false;
+  if (reanalyzeBtn) reanalyzeBtn.disabled = false;
+
+  const notReady = getAnalyzeNotReadyReason();
+  if (notReady) {
+    analyzeBtn.classList.add("inactive");
+    if (reanalyzeBtn) reanalyzeBtn.classList.add("inactive");
+
+    if (isTranscriptBlocked()) {
+      analyzeBtnText.textContent = "Transcript unavailable";
+    } else if (currentTabLoading || extractionPending) {
+      analyzeBtnText.textContent = "Loading content…";
+    } else {
+      analyzeBtnText.textContent = "Analyze";
+    }
+    analyzeBtn.title = notReady;
+    if (reanalyzeBtn) reanalyzeBtn.title = notReady;
+  } else {
+    analyzeBtn.classList.remove("inactive");
+    if (reanalyzeBtn) reanalyzeBtn.classList.remove("inactive");
+    analyzeBtnText.textContent = analysisResult ? "🔄 Analyze Again" : "Analyze";
+    analyzeBtn.title = "";
+    if (reanalyzeBtn) {
+      reanalyzeBtn.title = "";
+      reanalyzeBtn.textContent = "🔄 Re-analyze";
+    }
   }
 }
 
@@ -795,87 +1333,197 @@ let extractionFailed = false;
 let extractionPending = false;
 
 /**
- * Extract content from the active tab. `seq` guards the UI: a superseded
- * attempt (newer tab refresh started meanwhile) must not write stale
- * content — or worse, its failure message — over the current attempt's
- * "retrieving" state.
- *
- * Two defenses against "early" snapshots:
- *   1. wait for the page to settle (document complete + YouTube shell
- *      rendered) before extracting,
- *   2. after extracting, verify the page's URL didn't change mid-flight
- *      (SPA navigation race) — retry once when it did.
+ * Extract content from the active tab (or background tab when loaded).
+ * Uses per-tab sequence numbers so background extractions finish and cache
+ * cleanly without clobbering or being aborted by tab switches.
  */
-async function extractPageContent(seq = refreshSeq) {
-  extractionFailed = false;
-  lastLoadWasLoading = false;
-  extractionPending = true;
-  refreshBtn.disabled = true;
-  contentPreview.textContent = "Retrieving content…";
-  pageAuthorEl.textContent = "";
-  pagePublishedEl.textContent = "";
+async function extractPageContent(seq = refreshSeq, targetTabId = null) {
+  let tabId, tabTitle, tabUrl, tabStatus;
+  if (targetTabId) {
+    try {
+      const tab = await chrome.tabs.get(targetTabId);
+      tabId = tab.id;
+      tabTitle = tab.title;
+      tabUrl = tab.url;
+      tabStatus = tab.status;
+    } catch {
+      return null; // Tab closed
+    }
+  } else {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab) {
+        tabId = tab.id;
+        tabTitle = tab.title;
+        tabUrl = tab.url;
+        tabStatus = tab.status;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  if (!tabId) {
+    if (!targetTabId || targetTabId === activeTabId) pageTitle.textContent = "Unknown Page";
+    return null;
+  }
+
+  const isBackground = tabId !== activeTabId;
+  const isTargetActive = !isBackground;
+
+  // For background tabs: ONLY extract if content is already loaded!
+  if (isBackground && tabStatus !== "complete") {
+    return null;
+  }
+
+  const tabSeq = (tabExtractSeq.get(tabId) || 0) + 1;
+  tabExtractSeq.set(tabId, tabSeq);
+  tabsExtracting.add(tabId);
+
+  if (isTargetActive) {
+    extractionFailed = false;
+    lastLoadWasLoading = false;
+    extractionPending = true;
+    refreshBtn.disabled = false; // Always clickable to cancel and retry!
+    contentPreview.textContent = "Retrieving content…";
+    pageAuthorEl.textContent = "";
+    pagePublishedEl.textContent = "";
+    pageTitle.textContent = tabTitle || "Retrieving…";
+    pageUrl.textContent = tabUrl || "";
+    pageType.textContent = detectPageTypeFromUrl(tabUrl || "");
+    updateAnalyzeButtonsState();
+  }
+
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (seq !== refreshSeq) return;
-    if (!tab?.id) { pageTitle.textContent = "Unknown Page"; return; }
-    activeTabId = tab.id;
-    lastLoadWasLoading = tab.status === "loading";
+    // If active tab is still loading, wait for it to complete or settle
+    if (tabStatus === "loading" && isTargetActive) {
+      lastLoadWasLoading = true;
+      currentTabLoading = true;
+      updateAnalyzeButtonsState();
+      await waitForTabComplete(tabId, 6000);
+      if (tabExtractSeq.get(tabId) !== tabSeq) return null;
+      try {
+        const refreshedTab = await chrome.tabs.get(tabId);
+        tabTitle = refreshedTab.title || tabTitle;
+        tabUrl = refreshedTab.url || tabUrl;
+        if (activeTabId === tabId) {
+          pageTitle.textContent = tabTitle || pageTitle.textContent;
+          pageUrl.textContent = tabUrl || pageUrl.textContent;
+        }
+      } catch {}
+      await waitForPageSettle(tabId, tabSeq);
+      if (tabExtractSeq.get(tabId) !== tabSeq) return null;
+    }
 
-    pageTitle.textContent = tab.title || "Retrieving…";
-    pageUrl.textContent = tab.url || "";
-    pageType.textContent = detectPageTypeFromUrl(tab.url || "");
-
-    // 1. Let the page settle — an early snapshot of a half-rendered or
-    // mid-navigation page is not the content the user wants.
-    await waitForPageSettle(tab.id, seq);
-    if (seq !== refreshSeq) return;
-
-    // 2. Extract, then verify the page didn't navigate during the fetch
+    // Extract content (loaded pages jump straight here for instant retrieval)
     for (let attempt = 0; attempt < 2; attempt++) {
-      const response = await tryExtract(tab.id);
-      if (seq !== refreshSeq) return;
+      const response = await tryExtract(tabId);
+      if (tabExtractSeq.get(tabId) !== tabSeq) return null;
+
       if (!response?.success) {
-        extractionFailed = true;
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 400));
+          if (tabExtractSeq.get(tabId) !== tabSeq) return null;
+          continue;
+        }
+        if (activeTabId === tabId) extractionFailed = true;
         break;
       }
-      const after = await requestPageIdentity(tab.id);
-      if (seq !== refreshSeq) return;
+
+      const after = await requestPageIdentity(tabId);
+      if (tabExtractSeq.get(tabId) !== tabSeq) return null;
       if (
         after?.url &&
         response.content?.url &&
         after.url !== response.content.url
       ) {
-        // The page navigated while extraction ran — take a fresh snapshot
         console.warn("[NutEgg] Page navigated during extraction — retrying");
         continue;
       }
-      extractedContent = response.content;
-      pageTitle.textContent = response.content.title || tab.title || "Untitled";
-      pageType.textContent = response.content.sourceType || pageType.textContent;
-      contentPreview.textContent = response.content.content || "(No content extracted)";
-      showProvenance(response.content.metadata || {});
-      break;
+
+      // Cache extracted content for the tab
+      const cached = tabResultCache.get(tabId) || {};
+      tabResultCache.set(tabId, {
+        ...cached,
+        extractedContent: response.content,
+      });
+
+      // Update UI only if this tab is currently the active tab
+      if (activeTabId === tabId) {
+        extractedContent = response.content;
+        currentTabLoading = false;
+        pageTitle.textContent = response.content.title || tabTitle || "Untitled";
+        pageType.textContent = response.content.sourceType || pageType.textContent;
+        contentPreview.textContent = response.content.content || "(No content extracted)";
+        showProvenance(response.content.metadata || {});
+        applyTranscriptBlock();
+        updateAnalyzeButtonsState();
+      }
+
+      return response.content;
     }
-  } catch {
-    // Unexpected (e.g. extension context invalidated by a reload) — keep the
-    // page title rather than showing a misleading "Error loading page"
-    extractionFailed = true;
+  } catch (err) {
+    if (activeTabId === tabId) {
+      console.error("[NutEgg] Extraction error:", err);
+      extractionFailed = true;
+    }
   } finally {
-    // Only the CURRENT attempt may flip the pending state — an older attempt
-    // finishing late must not re-enable the button while a newer one runs.
-    if (seq === refreshSeq) {
+    tabsExtracting.delete(tabId);
+    if (activeTabId === tabId && tabExtractSeq.get(tabId) === tabSeq) {
       extractionPending = false;
       refreshBtn.disabled = false;
+      updateAnalyzeButtonsState();
     }
   }
-  if (seq !== refreshSeq) return; // superseded — leave the UI alone
-  if (extractionFailed && !extractedContent) {
-    contentPreview.textContent = "(Could not extract content)";
-    showWarning(
-      "Could not extract content from this page — it may be restricted (chrome://, Web Store) or still loading. Click 🔄 to try again, or the panel retries once the page finishes loading."
-    );
+
+  if (activeTabId === tabId && tabExtractSeq.get(tabId) === tabSeq) {
+    if (extractionFailed && !extractedContent) {
+      contentPreview.textContent = "(Could not extract content)";
+      showWarning(
+        "Could not extract content from this page — it may be restricted (chrome://, Web Store) or still loading. Click 🔄 to try again."
+      );
+    }
+    applyTranscriptBlock();
+    updateAnalyzeButtonsState();
   }
-  applyTranscriptBlock();
+  return null;
+}
+
+/** Safe promise timeout wrapper. */
+function withTimeout(promise, ms, fallback = null) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
+/**
+ * Wait for a tab to finish loading (status === "complete").
+ * Works for both active and background tabs via chrome.tabs.onUpdated.
+ */
+async function waitForTabComplete(tabId, timeoutMs = 8000) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status === "complete") return true;
+  } catch {
+    return false;
+  }
+
+  return new Promise((resolve) => {
+    let timer;
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve(true);
+      }
+    };
+    timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve(false);
+    }, timeoutMs);
+    chrome.tabs.onUpdated.addListener(listener);
+  });
 }
 
 /**
@@ -884,28 +1532,40 @@ async function extractPageContent(seq = refreshSeq) {
  */
 async function tryExtract(tabId) {
   try {
-    const response = await chrome.tabs.sendMessage(tabId, { action: "extract-content" });
+    const response = await withTimeout(
+      chrome.tabs.sendMessage(tabId, { action: "extract-content" }),
+      8000,
+      null
+    );
     if (response?.success) return response;
   } catch {
     // Content script not injected yet (page mid-load, or never injected)
   }
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: [
-        "src/content/utils.js",
-        "src/content/extractors/youtube.js",
-        "src/content/extractors/twitter.js",
-        "src/content/extractors/article.js",
-        "src/content/extractors/generic.js",
-        "src/content/content-script.js",
-      ],
-    });
+    await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId },
+        files: [
+          "src/content/utils.js",
+          "src/content/extractors/youtube.js",
+          "src/content/extractors/twitter.js",
+          "src/content/extractors/article.js",
+          "src/content/extractors/generic.js",
+          "src/content/content-script.js",
+        ],
+      }),
+      4000,
+      null
+    );
   } catch {
     return null; // Restricted page (chrome://, Web Store, PDF viewer)
   }
   try {
-    return await chrome.tabs.sendMessage(tabId, { action: "extract-content" });
+    return await withTimeout(
+      chrome.tabs.sendMessage(tabId, { action: "extract-content" }),
+      8000,
+      null
+    );
   } catch {
     return null;
   }
@@ -914,7 +1574,34 @@ async function tryExtract(tabId) {
 /** Cheap page-state check (no transcript fetching). Null when unreachable. */
 async function requestPageIdentity(tabId) {
   try {
-    const resp = await chrome.tabs.sendMessage(tabId, { action: "page-identity" });
+    const resp = await withTimeout(
+      chrome.tabs.sendMessage(tabId, { action: "page-identity" }),
+      2500,
+      null
+    );
+    if (resp?.success) return resp;
+  } catch {}
+  try {
+    await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId },
+        files: [
+          "src/content/utils.js",
+          "src/content/extractors/youtube.js",
+          "src/content/extractors/twitter.js",
+          "src/content/extractors/article.js",
+          "src/content/extractors/generic.js",
+          "src/content/content-script.js",
+        ],
+      }),
+      3000,
+      null
+    );
+    const resp = await withTimeout(
+      chrome.tabs.sendMessage(tabId, { action: "page-identity" }),
+      2500,
+      null
+    );
     return resp?.success ? resp : null;
   } catch {
     return null;
@@ -924,19 +1611,18 @@ async function requestPageIdentity(tabId) {
 /**
  * Poll page-identity until the page settles (document complete, and for
  * YouTube the watch shell rendered), bounded to ~8s. Returns null when the
- * content script is unreachable — extraction proceeds and reports failure
- * itself.
+ * content script is unreachable — extraction proceeds and reports failure itself.
  */
 async function waitForPageSettle(tabId, seq) {
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + 4000;
   while (Date.now() < deadline) {
-    if (seq !== refreshSeq) return null;
+    if (tabExtractSeq.get(tabId) !== seq) return null;
     const identity = await requestPageIdentity(tabId);
-    if (!identity) return null;
-    if (identity.readyState === "complete" && identity.youtubeReady !== false) {
+    if (identity && identity.readyState === "complete" && identity.youtubeReady !== false) {
+      currentTabLoading = false;
       return identity;
     }
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 300));
   }
   return null; // timed out — extract anyway (the failure path will report)
 }
@@ -965,12 +1651,12 @@ function formatPublishedDate(raw) {
     : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-/** Provenance of the currently extracted page (fresh analyses). */
-function provenanceFromExtraction() {
-  if (!extractedContent) return null;
-  const m = extractedContent.metadata || {};
+/** Provenance of the extracted page (fresh analyses). */
+function provenanceFromExtraction(content = extractedContent) {
+  if (!content) return null;
+  const m = content.metadata || {};
   return {
-    title: extractedContent.title || "",
+    title: content.title || "",
     author: m.author || m.channel || m.handle || "",
     publishedAt: m.published || "",
   };
@@ -990,26 +1676,39 @@ function renderResultProvenance(prov) {
     : "";
 }
 
-/**
- * YouTube without a transcript: analysis would rely on the description only,
- * which produces misleading answers — warn and refuse to process.
- */
-function isTranscriptBlocked() {
-  return !!extractedContent &&
-    extractedContent.sourceType === "youtube" &&
-    extractedContent.transcriptAvailable === false;
-}
-
-function applyTranscriptBlock() {
-  if (!isTranscriptBlocked()) return;
-  analyzeBtn.disabled = true;
-  analyzeBtnText.textContent = "Transcript unavailable";
-  showWarning(
-    "Couldn't fetch the video transcript — analysis would be based on the description only and could mislead you. NutEgg will not process this video."
-  );
-}
-
 // --- Analyze ---
+
+/**
+ * Send an analyze request via a long-lived port connection instead of a
+ * one-shot `sendMessage`. The open port prevents Chrome from terminating
+ * the service worker during extended LLM calls (>30s).
+ */
+function sendAnalyzeViaPort(payload) {
+  return new Promise((resolve, reject) => {
+    try {
+      let settled = false;
+      const port = chrome.runtime.connect({ name: "nutegg-analyze" });
+      port.onMessage.addListener((response) => {
+        if (settled) return;
+        settled = true;
+        try { port.disconnect(); } catch {}
+        resolve(response);
+      });
+      port.onDisconnect.addListener(() => {
+        if (settled) return;
+        settled = true;
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          reject(new Error("Connection closed before response received"));
+        }
+      });
+      port.postMessage({ action: "analyze", payload });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
 
 /**
  * Run the analysis. Returns null on success (results rendered) or an error
@@ -1022,61 +1721,43 @@ async function handleAnalyze(force = false, eggsOverride = null, isReanalyze = f
     return "Obsidian server is offline. Start Obsidian with NutEgg plugin.";
   }
 
+  const notReady = getAnalyzeNotReadyReason();
+  if (notReady) {
+    showWarning(notReady);
+    return notReady;
+  }
+
+  const pinnedTabId = activeTabId;
+  const contentToAnalyze = extractedContent;
+
+  if (!contentToAnalyze || !contentToAnalyze.content) {
+    const msg = "The page is still loading or content is not ready yet. Please wait until it finishes loading.";
+    showWarning(msg);
+    return msg;
+  }
+
+  if (isTranscriptBlocked()) {
+    applyTranscriptBlock();
+    return "Video transcript unavailable — NutEgg will not process this video.";
+  }
+
   isReanalyzing = isReanalyze;
-  hideMessages();
-  if (isReanalyze) {
-    processedNote.classList.remove("hidden");
-    processedMessage.textContent = "Retrieving page content…";
-  }
-  if (reanalyzeBtn) {
-    reanalyzeBtn.disabled = true;
-    reanalyzeBtn.textContent = "Retrieving…";
-  }
-  analyzeBtn.disabled = true;
-  analyzeBtnText.textContent = "Retrieving…";
-
-  try {
-    if (force || !extractedContent) {
-      await extractPageContent();
-    }
-
-    // Fallback: if extraction couldn't get content from the tab, check if we have stored content
-    if (!extractedContent && captureHistory.length > 0) {
-      const entry = captureHistory[0];
-      if (entry?.content) {
-        extractedContent = {
-          url: entry.url || pageUrl.textContent || "",
-          title: entry.title || pageTitle.textContent || "",
-          content: entry.content,
-          sourceType: entry.sourceType || "webpage",
-          metadata: {
-            ...(entry.author ? { author: entry.author } : {}),
-            ...(entry.publishedAt ? { published: entry.publishedAt } : {}),
-          },
-        };
-      }
-    }
-
-    if (!extractedContent) {
-      showError("Could not extract page content. Try refreshing.");
-      return "Could not extract page content. Try refreshing.";
-    }
-    if (isTranscriptBlocked()) {
-      applyTranscriptBlock();
-      return "Video transcript unavailable — NutEgg will not process this video.";
-    }
-
+  if (activeTabId === pinnedTabId) {
+    hideMessages();
     if (isReanalyze) {
       processedNote.classList.remove("hidden");
       processedMessage.textContent = "Analyzing content…";
+      if (reanalyzeBtn) {
+        reanalyzeBtn.disabled = true;
+        reanalyzeBtn.textContent = "Analyzing…";
+      }
     }
-    if (reanalyzeBtn) {
-      reanalyzeBtn.disabled = true;
-      reanalyzeBtn.textContent = "Analyzing…";
-    }
+    if (historySelect) historySelect.disabled = true;
     analyzeBtn.disabled = true;
     analyzeBtnText.textContent = "Analyzing...";
+  }
 
+  try {
     const questions = customQuestionsEl.value
       .split("\n")
       .map((q) => q.trim())
@@ -1090,35 +1771,41 @@ async function handleAnalyze(force = false, eggsOverride = null, isReanalyze = f
       (preSelectedEggs.size > 0 ? [...preSelectedEggs] : null);
 
     const payload = {
-      url: extractedContent.url || "",
-      title: extractedContent.title || "",
-      content: extractedContent.content || "",
-      sourceType: extractedContent.sourceType || "generic",
-      metadata: extractedContent.metadata,
-      chapters: extractedContent.chapters || undefined,
+      url: contentToAnalyze.url || "",
+      title: contentToAnalyze.title || "",
+      content: contentToAnalyze.content || "",
+      sourceType: contentToAnalyze.sourceType || "generic",
+      metadata: contentToAnalyze.metadata,
+      chapters: contentToAnalyze.chapters || undefined,
       questions,
       force: true,
       stage: 1,
       ...(targetEggs && targetEggs.length > 0 ? { eggs: targetEggs } : {}),
     };
 
-    const response = await chrome.runtime.sendMessage({ action: "analyze", payload });
+    // Cache the analyzing state so if user switches back while in progress, it shows analyzing
+    const existingCache = tabResultCache.get(pinnedTabId) || {};
+    tabResultCache.set(pinnedTabId, {
+      ...existingCache,
+      status: "analyzing",
+      url: contentToAnalyze.url,
+      extractedContent: contentToAnalyze,
+      stage1Payload: payload,
+      isReanalyzing: isReanalyze,
+      analysisResult: isReanalyze ? (analysisResult || existingCache.analysisResult) : null,
+      captureHistory: [...captureHistory],
+      currentNutId: currentNutId || existingCache.currentNutId,
+    });
+
+    const response = await sendAnalyzeViaPort(payload);
 
     if (response?.error) {
-      showError(response.error, response.errorCode);
+      tabResultCache.delete(pinnedTabId);
+      if (activeTabId === pinnedTabId) {
+        showError(response.error, response.errorCode);
+      }
       return response.error;
     }
-
-    stage1Payload = payload;
-    stage1ContentAnalysis = response;
-
-    cachedProcessedSaved = null;
-    followUpQa = [];
-    followupInput.value = "";
-    nutCollected = false;
-    eggHatched = false;
-    activeEggTab = null;
-    analysisResult = response;
 
     // For re-analyze (since eggs are already selected on the page) or fast mode, do both stage 1 and stage 2
     const shouldRunStage2 = isReanalyze || analysisMode === "fast";
@@ -1127,38 +1814,76 @@ async function handleAnalyze(force = false, eggsOverride = null, isReanalyze = f
       : (response.matchedEggs && response.matchedEggs.length > 0 ? response.matchedEggs : []);
 
     if (shouldRunStage2) {
-      // Immediately render Stage 1 (title verdict, summary, chapter map, matched eggs)
-      showResultsState(response, provenanceFromExtraction());
+      const existingCache2 = tabResultCache.get(pinnedTabId) || {};
+      tabResultCache.set(pinnedTabId, {
+        ...existingCache2,
+        status: eggsForStage2.length > 0 ? "analyzing" : "done",
+        url: contentToAnalyze.url,
+        extractedContent: contentToAnalyze,
+        analysisResult: response,
+        stage1Payload: payload,
+        stage1ContentAnalysis: response,
+        isReanalyzing: isReanalyze,
+        captureHistory: [...captureHistory],
+        currentNutId: currentNutId || existingCache2.currentNutId,
+      });
 
-      if (isReanalyze) {
-        processedNote.classList.remove("hidden");
-        processedMessage.textContent = "Comparing against selected eggs…";
-        if (reanalyzeBtn) {
-          reanalyzeBtn.disabled = true;
-          reanalyzeBtn.textContent = "Comparing knowledge…";
+      if (activeTabId === pinnedTabId) {
+        stage1Payload = payload;
+        stage1ContentAnalysis = response;
+        cachedProcessedSaved = null;
+        followUpQa = [];
+        followupInput.value = "";
+        nutCollected = false;
+        eggHatched = false;
+        activeEggTab = null;
+        analysisResult = response;
+
+        showResultsState(response, provenanceFromExtraction(contentToAnalyze));
+
+        if (isReanalyze) {
+          processedNote.classList.remove("hidden");
+          processedMessage.textContent = "Comparing against selected eggs…";
+          if (reanalyzeBtn) {
+            reanalyzeBtn.disabled = true;
+            reanalyzeBtn.textContent = "Comparing knowledge…";
+          }
+        }
+
+        if (eggsForStage2.length > 0) {
+          if (!isReanalyze) {
+            if (verdictSection) verdictSection.classList.remove("hidden");
+            if (verdictBadge) verdictBadge.className = "verdict-badge";
+            if (verdictIcon) verdictIcon.textContent = "⏳";
+            if (verdictText) verdictText.textContent = "Comparing knowledge…";
+            if (verdictReason) {
+              verdictReason.textContent = `Comparing against ${eggsForStage2.length} egg(s)…`;
+            }
+          } else {
+            if (verdictSection) verdictSection.classList.add("hidden");
+          }
+          if (stage1ConfirmBox) stage1ConfirmBox.classList.add("hidden");
         }
       }
 
       if (eggsForStage2.length > 0) {
-        if (!isReanalyze) {
-          if (verdictSection) verdictSection.classList.remove("hidden");
-          if (verdictBadge) verdictBadge.className = "verdict-badge";
-          if (verdictIcon) verdictIcon.textContent = "⏳";
-          if (verdictText) verdictText.textContent = "Comparing knowledge…";
-          if (verdictReason) {
-            verdictReason.textContent = `Comparing against ${eggsForStage2.length} egg(s)…`;
-          }
-        } else {
-          if (verdictSection) verdictSection.classList.add("hidden");
-        }
-        if (stage1ConfirmBox) stage1ConfirmBox.classList.add("hidden");
-
-        await handleProceedStage2(eggsForStage2, false, isReanalyze);
+        await handleProceedStage2(
+          eggsForStage2,
+          false,
+          isReanalyze,
+          pinnedTabId,
+          response,
+          payload,
+          contentToAnalyze
+        );
       }
 
-      if (isReanalyze || captureHistory.length > 0) {
-        processedMessage.textContent = "Re-analyzed just now — showing fresh result.";
-        processedNote.classList.remove("hidden");
+      if (activeTabId === pinnedTabId) {
+        if (isReanalyze || captureHistory.length > 0) {
+          processedMessage.textContent = "Re-analyzed just now — showing fresh result.";
+          processedNote.classList.remove("hidden");
+          renderHistorySelect(currentNutId);
+        }
       }
     } else {
       if (analysisMode === "confirm") {
@@ -1168,21 +1893,85 @@ async function handleAnalyze(force = false, eggsOverride = null, isReanalyze = f
         delete response.shouldReadReason;
         delete response.newKnowledge;
       }
-      showResultsState(response, provenanceFromExtraction());
+      const stage1NutId = response.nutId || null;
+      if (stage1NutId) {
+        currentNutId = stage1NutId;
+      }
+      let freshHistory = null;
+      if (contentToAnalyze.url && serverOnline) {
+        try {
+          const histResp = await chrome.runtime.sendMessage({
+            action: "history",
+            url: contentToAnalyze.url,
+          });
+          if (histResp?.history?.length) {
+            freshHistory = histResp.history;
+          }
+        } catch {}
+      }
+      const stage1Entry = stage1NutId
+        ? {
+            nutId: stage1NutId,
+            capturedAt: new Date().toISOString(),
+            saved: "analyzed",
+            result: response,
+            url: contentToAnalyze.url,
+            title: contentToAnalyze.title,
+            content: contentToAnalyze.content,
+            sourceType: contentToAnalyze.sourceType,
+            author: contentToAnalyze.metadata?.author || "",
+            publishedAt: contentToAnalyze.metadata?.published || "",
+          }
+        : null;
+      const updatedHistory = freshHistory || (stage1Entry ? [stage1Entry, ...captureHistory] : captureHistory);
+
+      tabResultCache.set(pinnedTabId, {
+        status: "done",
+        url: contentToAnalyze.url,
+        extractedContent: contentToAnalyze,
+        analysisResult: response,
+        stage1Payload: { ...payload, nutId: stage1NutId },
+        stage1ContentAnalysis: response,
+        currentNutId: stage1NutId || currentNutId,
+        captureHistory: updatedHistory,
+        justReanalyzed: isReanalyze,
+      });
+      if (activeTabId === pinnedTabId) {
+        stage1Payload = { ...payload, nutId: stage1NutId };
+        stage1ContentAnalysis = response;
+        currentNutId = stage1NutId || currentNutId;
+        captureHistory = updatedHistory;
+        cachedProcessedSaved = null;
+        followUpQa = [];
+        followupInput.value = "";
+        nutCollected = false;
+        eggHatched = false;
+        activeEggTab = null;
+        analysisResult = response;
+        showResultsState(response, provenanceFromExtraction(contentToAnalyze));
+        if (isReanalyze || captureHistory.length > 0) {
+          processedMessage.textContent = isReanalyze ? "Re-analyzed just now — showing fresh result." : "Analyzed (Stage 1) — choose eggs to hatch.";
+          processedNote.classList.remove("hidden");
+          renderHistorySelect(currentNutId);
+        }
+      }
     }
+
     return null;
   } catch (err) {
     const message = err instanceof Error ? err.message : "Analysis failed";
-    showError(message);
+    tabResultCache.delete(pinnedTabId);
+    if (activeTabId === pinnedTabId) {
+      showError(message);
+    }
     return message;
   } finally {
     isReanalyzing = false;
-    if (reanalyzeBtn) {
-      reanalyzeBtn.disabled = false;
-      reanalyzeBtn.textContent = "🔄 Re-analyze";
+    if (historySelect) historySelect.disabled = false;
+    const activeCache = tabResultCache.get(activeTabId);
+    if (!activeCache || (activeCache.status !== "analyzing" && activeCache.status !== "hatching")) {
+      updateAnalyzeButtonsState();
     }
-    analyzeBtn.disabled = false;
-    analyzeBtnText.textContent = analysisResult ? "🔄 Analyze Again" : "Analyze";
   }
 }
 
@@ -1192,11 +1981,25 @@ function showResultsState(result, provenance = null) {
   analysisResult = result;
   captureState.classList.add("hidden");
   resultsState.classList.remove("hidden");
-  if (!isReanalyzing) {
+  if (!isReanalyzing && captureHistory.length <= 1) {
     processedNote.classList.add("hidden");
   } else {
     processedNote.classList.remove("hidden");
+    if (captureHistory.length > 1 && !processedMessage.textContent) {
+      const entry = (currentNutId != null && captureHistory.find((h) => String(h.nutId) === String(currentNutId))) || captureHistory[0];
+      if (entry) {
+        const when = new Date(entry.capturedAt).toLocaleString();
+        const stateLabel = entry.saved === "saved"
+          ? "saved" : entry.saved === "skip" ? "collected" : "analyzed";
+        processedMessage.textContent = `Captured ${when} (${stateLabel}) — showing stored result.`;
+      }
+    }
   }
+  if (!isReanalyzing) {
+    updateAnalyzeButtonsState();
+    if (historySelect) historySelect.disabled = false;
+  }
+  renderHistorySelect(currentNutId);
   renderResultProvenance(provenance);
 
   const isStage1 = result.stage === "stage1";
@@ -1248,8 +2051,25 @@ function showResultsState(result, provenance = null) {
     .map((b) => `<li>${escapeHtml(b)}</li>`)
     .join("");
 
-  // Chapter Map — clickable when timestamps exist (video)
-  if (result.chapterMap && result.chapterMap.length > 0) {
+  // Chapter Map — clickable when timestamps exist (video).
+  // For short content without an original chapter map, don't show it:
+  // - If isLongForm is false and no author chapters were provided, don't show it.
+  // - If chapterMap has fewer than 2 entries and no author chapters were provided, don't show it.
+  const hasAuthorChapters =
+    (Array.isArray(extractedContent?.chapters) && extractedContent.chapters.length > 0) ||
+    (Array.isArray(stage1Payload?.content?.chapters) && stage1Payload.content.chapters.length > 0) ||
+    (Array.isArray(result?.chapters) && result.chapters.length > 0);
+
+  const isShortWithoutChapters =
+    (result.isLongForm === false || !result.chapterMap || result.chapterMap.length <= 1) &&
+    !hasAuthorChapters;
+
+  const shouldShowChapterMap =
+    Array.isArray(result.chapterMap) &&
+    result.chapterMap.length > 0 &&
+    !isShortWithoutChapters;
+
+  if (shouldShowChapterMap) {
     chapterSection.classList.remove("hidden");
     chapterList.innerHTML = result.chapterMap
       .map((c) => {
@@ -1617,6 +2437,26 @@ async function loadHistoryIfAny(seq = refreshSeq, urlOverride = null) {
   return false;
 }
 
+/** Render or update the version history select dropdown. */
+function renderHistorySelect(selectedNutId = currentNutId) {
+  if (!historySelect) return;
+  if (captureHistory.length > 1) {
+    const hasMatch = selectedNutId != null && captureHistory.some((h) => String(h.nutId) === String(selectedNutId));
+    historySelect.classList.remove("hidden");
+    historySelect.innerHTML = captureHistory
+      .map((h, i) => {
+        const d = new Date(h.capturedAt).toLocaleString();
+        const s = h.saved === "saved" ? "saved" : h.saved === "skip" ? "collected" : "analyzed";
+        const selected = (hasMatch ? String(h.nutId) === String(selectedNutId) : i === 0) ? " selected" : "";
+        return `<option value="${i}"${selected}>${d} — ${s}</option>`;
+      })
+      .join("");
+  } else {
+    historySelect.classList.add("hidden");
+    historySelect.innerHTML = "";
+  }
+}
+
 /** Show one cached capture (from history) with its capture timestamp. */
 function showHistoryEntry(entry) {
   cachedProcessedSaved = entry.saved || "analyzed";
@@ -1625,10 +2465,22 @@ function showHistoryEntry(entry) {
   currentNutId = entry.nutId ?? null;
   analysisResult = entry.result;
 
-  if (entry.content && !extractedContent) {
+  if (entry.result?.stage === "stage1") {
+    stage1ContentAnalysis = entry.result;
+    stage1Payload = {
+      url: entry.url || extractedContent?.url || pageUrl.textContent || "",
+      title: entry.title || extractedContent?.title || pageTitle.textContent || "",
+      content: entry.content || extractedContent?.content || "",
+      sourceType: entry.sourceType || extractedContent?.sourceType || "generic",
+      metadata: extractedContent?.metadata,
+      nutId: entry.nutId,
+    };
+  }
+
+  if (entry.content) {
     extractedContent = {
       url: entry.url || pageUrl.textContent || "",
-      title: entry.title || "",
+      title: entry.title || pageTitle.textContent || "",
       content: entry.content,
       sourceType: entry.sourceType || "webpage",
       metadata: {
@@ -1636,6 +2488,23 @@ function showHistoryEntry(entry) {
         ...(entry.publishedAt ? { published: entry.publishedAt } : {}),
       },
     };
+    contentPreview.textContent = entry.content;
+  }
+
+  if (activeTabId) {
+    const existing = tabResultCache.get(activeTabId);
+    if (existing) {
+      tabResultCache.set(activeTabId, {
+        ...existing,
+        extractedContent: existing.extractedContent || extractedContent,
+        analysisResult: entry.result,
+        currentNutId: entry.nutId,
+        eggHatched,
+        nutCollected,
+        stage1Payload: (entry.result?.stage === "stage1" ? stage1Payload : existing.stage1Payload),
+        stage1ContentAnalysis: (entry.result?.stage === "stage1" ? stage1ContentAnalysis : existing.stage1ContentAnalysis),
+      });
+    }
   }
 
   // Stored provenance from the DB row, falling back to the live extraction
@@ -1654,19 +2523,7 @@ function showHistoryEntry(entry) {
   processedNote.classList.remove("hidden");
 
   // Version selector when multiple captures exist
-  if (captureHistory.length > 1) {
-    historySelect.classList.remove("hidden");
-    historySelect.innerHTML = captureHistory
-      .map((h, i) => {
-        const d = new Date(h.capturedAt).toLocaleString();
-        const s = h.saved === "saved" ? "saved" : h.saved === "skip" ? "collected" : "analyzed";
-        const selected = h.nutId === entry.nutId ? " selected" : "";
-        return `<option value="${i}"${selected}>${d} — ${s}</option>`;
-      })
-      .join("");
-  } else {
-    historySelect.classList.add("hidden");
-  }
+  renderHistorySelect(entry.nutId);
 }
 
 /** Render the "Your Questions" section: initial answers + follow-ups. */
@@ -1775,9 +2632,13 @@ function showCaptureState() {
   resultsState.classList.add("hidden");
   resultPageInfo.classList.add("hidden");
   captureState.classList.remove("hidden");
-  analyzeBtn.disabled = false;
-  // Label reflects that this URL was processed before
-  analyzeBtnText.textContent = captureHistory.length > 0 ? "🔄 Analyze Again" : "Analyze";
+  if (extractedContent) {
+    contentPreview.textContent = extractedContent.content || "(No content extracted)";
+    if (extractedContent.title) pageTitle.textContent = extractedContent.title;
+    if (extractedContent.url) pageUrl.textContent = extractedContent.url;
+    if (extractedContent.sourceType) pageType.textContent = extractedContent.sourceType;
+    showProvenance(extractedContent.metadata || {});
+  }
   analysisResult = null;
   cachedProcessedSaved = null;
   followUpQa = [];
@@ -1787,6 +2648,7 @@ function showCaptureState() {
   currentNutId = null;
   activeEggTab = null;
   hideMessages();
+  updateAnalyzeButtonsState();
 }
 
 // --- Confirm (add to knowledge base) ---
@@ -1836,22 +2698,34 @@ async function handleSaveRaw() {
   updateActionButtons();
 }
 
-async function doSave(newKnowledge, isHatch = false) {
+async function doSave(
+  newKnowledge,
+  isHatch = false,
+  overrideContent = null,
+  overrideResult = null,
+  overrideNutId = null,
+  targetPinnedId = null
+) {
+  const isTargetActive = !targetPinnedId || (activeTabId === targetPinnedId);
+  const content = overrideContent || (isTargetActive ? extractedContent : null);
+  const result = overrideResult || (isTargetActive ? analysisResult : null);
+  const nutId = overrideNutId ?? (isTargetActive ? currentNutId : null);
+
   try {
-    if (!extractedContent) {
+    if (!content && isTargetActive) {
       await extractPageContent();
     }
     const payload = {
-      url: extractedContent?.url || analysisResult?.url || "",
-      title: extractedContent?.title || analysisResult?.title || "",
-      content: extractedContent?.content || "",
-      sourceType: extractedContent?.sourceType || "generic",
-      metadata: extractedContent?.metadata,
-      summary: analysisResult?.summary || "",
-      matchedEggs: analysisResult?.matchedEggs || [],
+      url: content?.url || result?.url || "",
+      title: content?.title || result?.title || "",
+      content: content?.content || "",
+      sourceType: content?.sourceType || "generic",
+      metadata: content?.metadata,
+      summary: result?.summary || "",
+      matchedEggs: result?.matchedEggs || [],
       newKnowledge,
-      analysis: analysisResult || undefined,
-      nutId: currentNutId ?? undefined,
+      analysis: result || undefined,
+      nutId: nutId ?? undefined,
       // Hatching collects the nut too — skip the raw save only when the
       // nut was already collected (this session or a previous one).
       // "analyzed" means processed but never saved, so the raw must be saved.
@@ -1862,44 +2736,63 @@ async function doSave(newKnowledge, isHatch = false) {
     const response = await chrome.runtime.sendMessage({ action: "confirm", payload });
 
     if (response?.success) {
-      if (newKnowledge.length > 0 || isHatch) {
-        // Hatching the egg collects the nut as well
-        eggHatched = true;
-        nutCollected = true;
-      } else {
-        nutCollected = true;
-      }
-      // Keep the capture history entry in sync with the new save state
-      const entry = captureHistory.find((h) => h.nutId === currentNutId);
-      if (entry) entry.saved = (newKnowledge.length > 0 || isHatch) ? "saved" : "skip";
-      const merged = response?.merged || [];
-      const mergedNote = merged.length > 0
-        ? ` 🧹 ${merged
-            .map((m) => `${m.entries} unprocessed entries merged into ${m.egg}`)
-            .join(", ")}`
-        : "";
-      const isStage1BoxVisible = analysisResult?.stage === "stage1" && stage1ConfirmBox && !stage1ConfirmBox.classList.contains("hidden");
-      if (isStage1BoxVisible) {
-        // In Stage 1, stage1-confirm-box updates in-place to show the saved state.
-        // Hide successBanner so only one message is displayed.
-        successBanner.classList.add("hidden");
-      } else {
-        if (newKnowledge.length > 0) {
-          successMessage.textContent = `Egg hatched — knowledge added and nut collected!${mergedNote}`;
-        } else if (isHatch) {
-          successMessage.textContent = `Egg hatched — nut collected! (No new knowledge needed to add)`;
-        } else {
-          successMessage.textContent = "Nut collected to Obsidian vault!";
+      if (targetPinnedId) {
+        const existing = tabResultCache.get(targetPinnedId) || {};
+        existing.eggHatched = (newKnowledge.length > 0 || isHatch);
+        existing.nutCollected = true;
+        if (existing.captureHistory && nutId != null) {
+          const ce = existing.captureHistory.find((h) => String(h.nutId) === String(nutId));
+          if (ce) ce.saved = (newKnowledge.length > 0 || isHatch) ? "saved" : "skip";
         }
-        successBanner.classList.remove("hidden");
+        tabResultCache.set(targetPinnedId, existing);
       }
-      updateActionButtons();
-      fetchMetrics();
+      if (isTargetActive) {
+        if (newKnowledge.length > 0 || isHatch) {
+          // Hatching the egg collects the nut as well
+          eggHatched = true;
+          nutCollected = true;
+        } else {
+          nutCollected = true;
+        }
+        // Keep the capture history entry in sync with the new save state
+        if (nutId != null) {
+          const entry = captureHistory.find((h) => String(h.nutId) === String(nutId));
+          if (entry) entry.saved = (newKnowledge.length > 0 || isHatch) ? "saved" : "skip";
+        }
+        renderHistorySelect(currentNutId);
+        const merged = response?.merged || [];
+        const mergedNote = merged.length > 0
+          ? ` 🧹 ${merged
+              .map((m) => `${m.entries} unprocessed entries merged into ${m.egg}`)
+              .join(", ")}`
+          : "";
+        const isStage1BoxVisible = result?.stage === "stage1" && stage1ConfirmBox && !stage1ConfirmBox.classList.contains("hidden");
+        if (isStage1BoxVisible) {
+          // In Stage 1, stage1-confirm-box updates in-place to show the saved state.
+          // Hide successBanner so only one message is displayed.
+          successBanner.classList.add("hidden");
+        } else {
+          if (newKnowledge.length > 0) {
+            successMessage.textContent = `Egg hatched — knowledge added and nut collected!${mergedNote}`;
+          } else if (isHatch) {
+            successMessage.textContent = `Egg hatched — nut collected! (No new knowledge needed to add)`;
+          } else {
+            successMessage.textContent = "Nut collected to Obsidian vault!";
+          }
+          successBanner.classList.remove("hidden");
+        }
+        updateActionButtons();
+        fetchMetrics();
+      }
     } else {
-      showError(response?.error || "Failed to save");
+      if (isTargetActive) {
+        showError(response?.error || "Failed to save");
+      }
     }
   } catch (err) {
-    showError(err instanceof Error ? err.message : "Failed to save");
+    if (isTargetActive) {
+      showError(err instanceof Error ? err.message : "Failed to save");
+    }
   }
 }
 
@@ -1942,11 +2835,53 @@ function hideMessages() {
 function showWarning(msg) {
   warningMessage.textContent = msg;
   warningBanner.classList.remove("hidden");
+  updateServerStatusIndicator();
 }
-function hideWarning() { warningBanner.classList.add("hidden"); }
+function hideWarning() {
+  warningBanner.classList.add("hidden");
+  warningMessage.textContent = "";
+  updateServerStatusIndicator();
+}
 
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+/** Redirect to GitHub issues prefilled with bug report template. */
+function openGitHubBugReport(errorContext = "") {
+  let contentUrl = "";
+  if (extractedContent?.url) {
+    contentUrl = extractedContent.url;
+  } else if (pageUrl?.textContent && pageUrl.textContent !== "Loading...") {
+    contentUrl = pageUrl.textContent;
+  }
+
+  const manifest = chrome.runtime?.getManifest?.() || {};
+  const version = manifest.version || "0.0.0";
+  const observed = errorContext
+    ? `Encountered error: ${errorContext}`
+    : "<!-- Describe what actually happened (e.g. error message, unexpected output, stuck on retrieving/analyzing) -->";
+
+  const body = [
+    "### URL of the content",
+    contentUrl || "[Enter the URL of the article, video, or webpage here]",
+    "",
+    "### Expected behavior",
+    "<!-- A clear description of what you expected to happen -->",
+    "",
+    "",
+    "### Observed behavior",
+    observed,
+    "",
+    "",
+    "### Environment",
+    `- NutEgg Extension Version: v${version}`,
+    `- Browser: ${navigator.userAgent || "Chrome"}`,
+  ].join("\n");
+
+  const title = errorContext ? `[Bug]: ${errorContext.slice(0, 60)}` : "[Bug]: ";
+  const issueUrl = `https://github.com/staff-000/nutegg/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+  window.open(issueUrl, "_blank");
 }

@@ -263,7 +263,55 @@ async function fetchYouTubeCaptions() {
     }
   }
 
-  // Layer 2: live player tracks directly from page context (picks up generated ASR tracks)
+  // Layer 2: watch-page HTML fetch — pure network, works in background
+  // tabs. No longer gated by `if (!pr)`: even when the player response was
+  // parsed from <script> tags, it may lack caption tracks (ASR-only, stale SPA
+  // data, etc.), so the fresh HTML fetch is always worth trying.
+  try {
+    const resp = await fetchWithTimeout(
+      `https://www.youtube.com/watch?v=${videoId}&gl=US&hl=en`,
+      {},
+      4000
+    );
+    const html = await resp.text();
+    const idx = html.indexOf('"captionTracks"');
+    if (idx !== -1) {
+      const raw = extractBalanced(html, idx);
+      if (raw) {
+        tracks = JSON.parse(raw);
+        if (Array.isArray(tracks) && tracks.length > 0) {
+          const transcript = await fetchTimedtext(tracks);
+          if (transcript) {
+            console.log(`[NutEgg] Captions: watch-page HTML in ${Date.now() - started}ms`);
+            return transcript;
+          }
+        }
+      }
+    }
+  } catch {
+    // Fall through
+  }
+
+  // Layer 3: Innertube player API — pure network, works in background
+  // tabs. Always worth one timeout-bounded call.
+  try {
+    const playerResp = await fetchInnertubePlayer(videoId);
+    const innertubeTracks =
+      playerResp?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (Array.isArray(innertubeTracks) && innertubeTracks.length > 0) {
+      const transcript = await fetchTimedtext(innertubeTracks);
+      if (transcript) {
+        console.log(`[NutEgg] Captions: innertube in ${Date.now() - started}ms`);
+        return transcript;
+      }
+    }
+  } catch {
+    // Fall through
+  }
+
+  // Layer 4: live player tracks from page context — DOM-dependent,
+  // fails in background tabs (player suspended, CC click ignored, timer
+  // throttling), so attempted after the network-only layers above.
   try {
     let playerTracks = await queryPlayerCaptionTracks();
     if (!playerTracks?.length) {
@@ -284,53 +332,8 @@ async function fetchYouTubeCaptions() {
     }
   } catch {}
 
-  // Layer 3: watch-page HTML — the raw string scan can find captionTracks
-  // that readYtVar missed (failed parse, renamed var, ...)
-  if (!pr) {
-    try {
-      const resp = await fetchWithTimeout(
-        `https://www.youtube.com/watch?v=${videoId}&gl=US&hl=en`,
-        {},
-        10000
-      );
-      const html = await resp.text();
-      const idx = html.indexOf('"captionTracks"');
-      if (idx !== -1) {
-        const raw = extractBalanced(html, idx);
-        if (raw) {
-          tracks = JSON.parse(raw);
-          if (Array.isArray(tracks) && tracks.length > 0) {
-            const transcript = await fetchTimedtext(tracks);
-            if (transcript) {
-              console.log(`[NutEgg] Captions: watch-page HTML in ${Date.now() - started}ms`);
-              return transcript;
-            }
-          }
-        }
-      }
-    } catch {
-      // Fall through
-    }
-  }
-
-  // Layer 4: Innertube player API — always worth one (timeout-bounded) call:
-  // it can succeed even when the page's own tracks are missing or stale.
-  try {
-    const playerResp = await fetchInnertubePlayer(videoId);
-    const innertubeTracks =
-      playerResp?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-    if (Array.isArray(innertubeTracks) && innertubeTracks.length > 0) {
-      const transcript = await fetchTimedtext(innertubeTracks);
-      if (transcript) {
-        console.log(`[NutEgg] Captions: innertube in ${Date.now() - started}ms`);
-        return transcript;
-      }
-    }
-  } catch {
-    // Fall through to transcript panel
-  }
-
-  // Layer 5: the on-page transcript panel ("Show transcript")
+  // Layer 5: the on-page transcript panel ("Show transcript") — DOM-heavy
+  // last resort, fails in background tabs.
   const panel = await readTranscriptPanel();
   console.log(
     panel
@@ -380,7 +383,7 @@ async function fetchInnertubePlayer(videoId) {
         },
       }),
     },
-    8000
+    4000
   );
   if (!resp.ok) return null;
   return resp.json();
@@ -422,7 +425,10 @@ async function fetchTimedtext(tracks) {
     return 0;
   });
 
-  for (const track of sortedTracks) {
+  // Limit candidate tracks to top 3 (avoids iterating through dozens of auto-translations)
+  const candidateTracks = sortedTracks.slice(0, 3);
+
+  for (const track of candidateTracks) {
     const rawUrl = track.baseUrl || track.url;
     if (!rawUrl) continue;
 
@@ -432,20 +438,16 @@ async function fetchTimedtext(tracks) {
       baseUrl.includes("signature=") ||
       baseUrl.includes("sig=");
 
-    // On signed URLs, tampering with query parameters like &fmt=json3 invalidates the signature,
-    // causing YouTube to return an empty <transcript/> with HTTP 200.
-    // Try the signed baseUrl first!
+    // On signed URLs, tampering with query parameters like &fmt=json3 invalidates the signature.
+    // Try baseUrl first!
     const urls = isSigned
-      ? (baseUrl.includes("fmt=") ? [baseUrl] : [baseUrl, `${baseUrl}&fmt=json3`, `${baseUrl}&fmt=srv3`])
-      : (baseUrl.includes("fmt=") ? [baseUrl] : [`${baseUrl}&fmt=json3`, baseUrl, `${baseUrl}&fmt=srv3`]);
+      ? [baseUrl]
+      : (baseUrl.includes("fmt=") ? [baseUrl] : [baseUrl, `${baseUrl}&fmt=json3`]);
 
     for (const url of urls) {
       try {
-        const resp = await fetchWithTimeout(url, {}, 5000);
+        const resp = await fetchWithTimeout(url, {}, 2500);
         if (!resp.ok) {
-          console.warn(
-            `[NutEgg] Captions (${track.languageCode || "unknown"}): ${timedtextFormat(url)} → HTTP ${resp.status}`
-          );
           continue;
         }
         const text = await resp.text();
@@ -659,12 +661,14 @@ async function readChapterPanel() {
       const label = (b.getAttribute("aria-label") || "").toLowerCase();
       return label === "chapters" || label.includes("chapters");
     });
-    if (button) button.click();
+    if (!button) return [];
+
+    button.click();
 
     const items = await waitFor(() => {
       const els = document.querySelectorAll("ytd-macro-markers-list-item-renderer");
       return els.length > 0 ? els : null;
-    }, 3000);
+    }, 800);
     if (!items) return [];
 
     const chapters = readChapterListDom();
@@ -818,13 +822,17 @@ async function readTranscriptPanel() {
       }
     }
 
+    if (!button && !panelEl) {
+      return "";
+    }
+
     // 3. Wait for transcript segment renderers to appear in the DOM
     const segments = await waitFor(() => {
       const els = document.querySelectorAll(
         "ytd-transcript-segment-renderer, .ytd-transcript-segment-renderer, ytd-transcript-search-panel-renderer ytd-transcript-segment-renderer, ytd-transcript-segment-list-renderer [role='button'], [target-id='engagement-panel-searchable-transcript'] ytd-transcript-segment-renderer"
       );
       return els.length > 0 ? els : null;
-    }, 5000);
+    }, 2000);
     if (!segments || segments.length === 0) return "";
 
     const lines = [...segments]
