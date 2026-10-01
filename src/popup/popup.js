@@ -224,6 +224,7 @@ function showResultsState(result, provenance = null) {
     });
   }
 
+  verdictUI.renderTitleVerdict(result.titleVerdict, settings.enabledSections?.titleVerdict !== false);
   mindmapUI.render(result.mindMap, settings.enabledSections.mindMap !== false);
 
   const hasAuthorChapters =
@@ -306,6 +307,7 @@ async function initPopup() {
     chipReChapters: document.getElementById("reanalyze-chip-chapters"),
     reanalyzeAccordion: document.getElementById("reanalyze-sections-accordion"),
     reanalyzeToggleBtn: document.getElementById("reanalyze-sections-toggle"),
+    reanalyzeSectionsBody: document.getElementById("reanalyze-sections-body"),
     onToggle: async (key) => {
       const ok = await settings.toggleSection(key);
       if (!ok) {
@@ -469,9 +471,6 @@ async function initPopup() {
     if (chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
   });
   headerUI.aiCreditPill?.addEventListener("click", () => {
-    if (chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
-  });
-  bannersUI.openSettingsKeyBtn?.addEventListener("click", () => {
     if (chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
   });
 
