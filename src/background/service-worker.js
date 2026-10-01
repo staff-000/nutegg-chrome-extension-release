@@ -1,10 +1,18 @@
 // NutEgg Background Service Worker
 
+importScripts("../../dist/ai-core.js");
+
+const {
+  PROVIDER_CATALOG,
+  checkCreditAI,
+  analyzeContentStandalone,
+  askFollowUpStandalone,
+} = NutEggAI;
+
 const DEFAULT_PORT = 27123;
 let serverPort = DEFAULT_PORT;
 
-// --- Init ---
-
+let initPromise = null;
 async function init() {
   const stored = await chrome.storage.local.get(["serverPort"]);
   if (stored.serverPort) serverPort = stored.serverPort;
@@ -15,10 +23,40 @@ async function init() {
     .catch(() => {}); // OK if sidePanel API not available
   console.log("[NutEgg] Port:", serverPort);
 }
-init();
 
-function getServerUrl() {
+function ensureInit() {
+  if (!initPromise) initPromise = init();
+  return initPromise;
+}
+ensureInit();
+
+async function getServerUrl() {
+  await ensureInit();
   return `http://127.0.0.1:${serverPort}`;
+}
+
+async function loadChromeAiSettings() {
+  const stored = await chrome.storage.local.get([
+    "chromeAiEnabled",
+    "chromeAiProvider",
+    "chromeAiApiKey",
+    "chromeAiModel",
+    "chromeAiModelFamily",
+    "chromeAiLocalEndpoint",
+    "outputLanguage",
+    "contentOutputLanguage",
+    "chromeAiOutputLanguage",
+    "chromeAiMaxTokens",
+    "chromeAiPromptOverrides",
+  ]);
+  const lang = stored.outputLanguage || stored.contentOutputLanguage || stored.chromeAiOutputLanguage || "same-as-content";
+  stored.outputLanguage = lang;
+  stored.contentOutputLanguage = lang;
+  stored.chromeAiOutputLanguage = lang;
+  if (stored.chromeAiPromptOverrides) {
+    stored.promptOverrides = stored.chromeAiPromptOverrides;
+  }
+  return stored;
 }
 
 // --- Messages ---
@@ -73,6 +111,38 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "check-chrome-ai") {
+    loadChromeAiSettings().then((settings) => {
+      const enabled = Boolean(settings.chromeAiEnabled);
+      const provider = settings.chromeAiProvider || "gemini";
+      const isLocal = provider === "local";
+      const hasKey = isLocal ? true : Boolean(settings.chromeAiApiKey && settings.chromeAiApiKey.trim());
+      sendResponse({
+        enabled,
+        configured: enabled && hasKey,
+        provider,
+        model: settings.chromeAiModel || (typeof PROVIDER_CATALOG !== "undefined" ? PROVIDER_CATALOG[provider]?.defaultModel : "") || "",
+      });
+    });
+    return true;
+  }
+
+  if (message.action === "check-chrome-credit") {
+    loadChromeAiSettings().then((settings) => {
+      checkCreditAI(settings)
+        .then((credit) => sendResponse(credit))
+        .catch((err) => sendResponse({ error: String(err), hasBalance: false, statusText: "Credit check failed" }));
+    });
+    return true;
+  }
+
+  if (message.action === "get-credit") {
+    fetchCredit()
+      .then((r) => sendResponse(r))
+      .catch((err) => sendResponse({ error: String(err), hasBalance: false }));
+    return true;
+  }
+
   if (message.action === "config-status") {
     checkConfigStatus()
       .then((r) => sendResponse(r))
@@ -82,9 +152,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.action === "set-port") {
     serverPort = message.port || DEFAULT_PORT;
-    chrome.storage.local.set({ serverPort });
-    sendResponse({ success: true, port: serverPort });
-    return false;
+    chrome.storage.local.set({ serverPort }).then(() => {
+      sendResponse({ success: true, port: serverPort });
+    }).catch((err) => {
+      sendResponse({ success: false, error: err?.message });
+    });
+    return true;
   }
 
   if (message.action === "metrics") {
@@ -102,13 +175,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "nutegg-analyze") return;
 
+  let isConnected = true;
+  port.onDisconnect.addListener(() => {
+    isConnected = false;
+  });
+
   port.onMessage.addListener(async (message) => {
+    if (message.action === "ping") {
+      // Heartbeat to keep service worker alive during long LLM calls (prevents MV3 30s idle termination)
+      return;
+    }
     if (message.action === "analyze") {
       try {
         const result = await handleAnalyze(message.payload);
-        port.postMessage(result);
+        if (isConnected) {
+          port.postMessage(result);
+        }
       } catch (err) {
-        port.postMessage({ error: err.message });
+        if (isConnected) {
+          try {
+            port.postMessage({ error: err.message });
+          } catch {}
+        }
       }
     }
   });
@@ -116,33 +204,87 @@ chrome.runtime.onConnect.addListener((port) => {
 // --- Server communication ---
 
 async function handleAnalyze(payload) {
-  const response = await fetch(`${getServerUrl()}/analyze`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const server = await checkServer();
 
-  const data = await response.json();
+  if (server.online) {
+    try {
+      const serverUrl = await getServerUrl();
+      const response = await fetch(`${serverUrl}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-  if (!response.ok) {
+      const data = await response.json();
+
+      if (!response.ok) {
+        return {
+          error: data.error || `Server error (${response.status})`,
+          errorCode: data.errorCode || "unknown",
+          statusCode: data.statusCode || response.status,
+          mode: "obsidian",
+        };
+      }
+
+      return { ...data, mode: "obsidian" };
+    } catch (err) {
+      return {
+        error: `Failed to connect to Obsidian: ${err.message}`,
+        errorCode: "network_error",
+        mode: "obsidian",
+      };
+    }
+  }
+
+  // Obsidian is offline -> Fall back to Chrome Standalone AI
+  const aiSettings = await loadChromeAiSettings();
+  if (!aiSettings.chromeAiEnabled) {
     return {
-      error: data.error || `Server error (${response.status})`,
-      errorCode: data.errorCode || "unknown",
-      statusCode: data.statusCode || response.status,
+      error: "Obsidian is offline and Chrome-only AI is disabled. Please start Obsidian or enable Chrome-only AI in Settings.",
+      errorCode: "chrome_ai_disabled",
+      mode: "offline",
     };
   }
 
-  return data;
+  const provider = aiSettings.chromeAiProvider || "gemini";
+  const isLocal = provider === "local";
+
+  if (!isLocal && (!aiSettings.chromeAiApiKey || !aiSettings.chromeAiApiKey.trim())) {
+    return {
+      error: "Obsidian is offline and no AI key is configured in Chrome settings.",
+      errorCode: "no_api_key",
+      mode: "chrome",
+    };
+  }
+
+  try {
+    const result = await analyzeContentStandalone(payload, aiSettings);
+    return {
+      ...result,
+      stage: "stage1",
+      mode: "chrome",
+      matchedEggs: [],
+      allEggs: [],
+    };
+  } catch (err) {
+    return {
+      error: err.message || "Chrome AI analysis failed",
+      errorCode: err.code || "unknown",
+      statusCode: err.statusCode || 500,
+      mode: "chrome",
+    };
+  }
 }
 
 async function handleConfirm(payload) {
-  const response = await fetch(`${getServerUrl()}/confirm`, {
+  const serverUrl = await getServerUrl();
+  const response = await fetch(`${serverUrl}/confirm`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     return { error: data.error || `Server error (${response.status})` };
@@ -155,8 +297,9 @@ async function fetchHistory(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
   try {
+    const serverUrl = await getServerUrl();
     const response = await fetch(
-      `${getServerUrl()}/history?url=${encodeURIComponent(url)}`,
+      `${serverUrl}/history?url=${encodeURIComponent(url)}`,
       { signal: controller.signal }
     );
     clearTimeout(timeout);
@@ -168,13 +311,14 @@ async function fetchHistory(url) {
 }
 
 async function handleCreateEgg({ name, description }) {
-  const response = await fetch(`${getServerUrl()}/create-egg`, {
+  const serverUrl = await getServerUrl();
+  const response = await fetch(`${serverUrl}/create-egg`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, description }),
   });
 
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     return { error: data.error || `Server error (${response.status})` };
@@ -187,7 +331,8 @@ async function fetchEggs() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const response = await fetch(`${getServerUrl()}/eggs`, {
+    const serverUrl = await getServerUrl();
+    const response = await fetch(`${serverUrl}/eggs`, {
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -199,29 +344,71 @@ async function fetchEggs() {
 }
 
 async function handleAsk(payload) {
-  const response = await fetch(`${getServerUrl()}/ask`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const server = await checkServer();
 
-  const data = await response.json();
+  if (server.online) {
+    const serverUrl = await getServerUrl();
+    const response = await fetch(`${serverUrl}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
 
-  if (!response.ok) {
+    const data = await response.json();
+
+    if (!response.ok) {
+      return {
+        error: data.error || `Server error (${response.status})`,
+        errorCode: data.errorCode || "unknown",
+      };
+    }
+
+    return data;
+  }
+
+  // Obsidian is offline -> Chrome AI
+  const aiSettings = await loadChromeAiSettings();
+  if (!aiSettings.chromeAiEnabled) {
     return {
-      error: data.error || `Server error (${response.status})`,
-      errorCode: data.errorCode || "unknown",
+      error: "Obsidian is offline and Chrome-only AI is disabled.",
+      errorCode: "chrome_ai_disabled",
+      answers: [],
     };
   }
 
-  return data;
+  const provider = aiSettings.chromeAiProvider || "gemini";
+  const isLocal = provider === "local";
+
+  if (!isLocal && (!aiSettings.chromeAiApiKey || !aiSettings.chromeAiApiKey.trim())) {
+    return {
+      error: "Obsidian is offline and no AI key is configured in Chrome settings.",
+      errorCode: "no_api_key",
+      answers: [],
+    };
+  }
+
+  try {
+    const question = (payload.questions && payload.questions[0]) || "";
+    const scope = payload.scope || "within";
+    const answer = await askFollowUpStandalone(payload, question, payload.priorQa || [], aiSettings, scope);
+    return {
+      answers: [{ question, answer, scope }],
+    };
+  } catch (err) {
+    return {
+      error: err.message || "Failed to answer question",
+      errorCode: err.code || "unknown",
+      answers: [],
+    };
+  }
 }
 
 async function checkConfigStatus() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const response = await fetch(`${getServerUrl()}/config-status`, { signal: controller.signal });
+    const serverUrl = await getServerUrl();
+    const response = await fetch(`${serverUrl}/config-status`, { signal: controller.signal });
     clearTimeout(timeout);
     const data = await response.json();
     if (data.port && data.port !== serverPort) {
@@ -235,11 +422,26 @@ async function checkConfigStatus() {
   }
 }
 
+async function fetchCredit() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try {
+    const serverUrl = await getServerUrl();
+    const response = await fetch(`${serverUrl}/credit`, { signal: controller.signal });
+    clearTimeout(timeout);
+    return await response.json();
+  } catch {
+    clearTimeout(timeout);
+    return { hasBalance: false, statusText: "Credit check failed" };
+  }
+}
+
 async function fetchMetrics() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const response = await fetch(`${getServerUrl()}/metrics`, { signal: controller.signal });
+    const serverUrl = await getServerUrl();
+    const response = await fetch(`${serverUrl}/metrics`, { signal: controller.signal });
     clearTimeout(timeout);
     return await response.json();
   } catch {
@@ -252,7 +454,8 @@ async function checkServer() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const response = await fetch(`${getServerUrl()}/health`, { signal: controller.signal });
+    const serverUrl = await getServerUrl();
+    const response = await fetch(`${serverUrl}/health`, { signal: controller.signal });
     clearTimeout(timeout);
     const data = await response.json();
     if (data.port && data.port !== serverPort) {

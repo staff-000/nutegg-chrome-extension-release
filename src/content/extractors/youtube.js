@@ -640,9 +640,9 @@ function dedupChapters(chapters) {
     if (!time || !title) continue;
 
     const seconds = parseTimestamp(`[${time.replace(/^\[|\]$/g, "")}]`);
-    // If the list starts repeating from 0 or earlier time, or duplicate timestamp
+    // If the list starts repeating from an earlier time, or duplicate timestamp
     if (seenTimes.has(time) || (seconds >= 0 && seconds <= lastSeconds && seenTimes.size >= 2)) {
-      if (seconds >= 0 && seconds <= 0 && seenTimes.size >= 2) break;
+      if (seconds >= 0 && seconds < lastSeconds && seenTimes.size >= 2) break;
       continue;
     }
 
@@ -988,8 +988,20 @@ function decodeHtmlEntities(str) {
     .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => {
+      try {
+        return String.fromCodePoint(parseInt(dec, 10));
+      } catch {
+        return "";
+      }
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      try {
+        return String.fromCodePoint(parseInt(hex, 16));
+      } catch {
+        return "";
+      }
+    })
     .replace(/\s+/g, " ");
 }
 
@@ -1011,7 +1023,7 @@ function decodeHtmlEntities(str) {
  */
 function dedupTranscriptLines(lines) {
   const out = [];
-  const seen = new Set();
+  const recentSeen = new Map();
   let lastStart = -1;
   let dropped = 0;
 
@@ -1031,14 +1043,32 @@ function dedupTranscriptLines(lines) {
     // text-dedup silently stopped working for non-English tracks.)
     const key = text.toLowerCase().replace(/\s+/g, " ").trim();
 
-    const isRepeat =
-      (key && seen.has(key)) ||
-      (start >= 0 && start < lastStart); // backwards jump = looped copy
-    if (isRepeat) {
+    // Loop detection: timeline jumped backwards
+    if (start >= 0 && start < lastStart) {
       dropped++;
       continue;
     }
-    if (key) seen.add(key);
+
+    // Overlapping / duplicate cue detection within a 3-second window
+    const lastSeenTime = key ? recentSeen.get(key) : undefined;
+    const isOverlappingRepeat =
+      key &&
+      lastSeenTime !== undefined &&
+      (start < 0 || Math.abs(start - lastSeenTime) <= 3);
+
+    if (isOverlappingRepeat) {
+      dropped++;
+      continue;
+    }
+
+    if (key) {
+      recentSeen.set(key, start);
+      if (start >= 0 && recentSeen.size > 200) {
+        for (const [k, t] of recentSeen) {
+          if (start - t > 30) recentSeen.delete(k);
+        }
+      }
+    }
     if (start >= 0) lastStart = start;
     out.push(line);
   }
@@ -1049,4 +1079,12 @@ function dedupTranscriptLines(lines) {
     );
   }
   return out;
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    decodeHtmlEntities,
+    dedupChapters,
+    cleanChapterTitle,
+  };
 }

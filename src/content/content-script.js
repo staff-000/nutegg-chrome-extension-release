@@ -34,12 +34,12 @@ window.EXTRACTORS = EXTRACTORS;
 // Main entry point
 // ============================================================
 
-function extractContent() {
+async function extractContent() {
   for (const ex of EXTRACTORS) {
     try {
       if (ex.detect()) {
         console.log(`[NutEgg] Using extractor: ${ex.name}`);
-        return ex.extract();
+        return await ex.extract();
       }
     } catch (e) {
       console.warn(`[NutEgg] Extractor "${ex.name}" failed:`, e);
@@ -47,7 +47,7 @@ function extractContent() {
   }
   // Ultimate fallback
   console.warn("[NutEgg] All extractors failed, using generic");
-  return extractGeneric();
+  return await extractGeneric();
 }
 
 // Listen for messages from popup/background (attached once per window)
@@ -57,11 +57,16 @@ if (!window.__nutegg_listener_attached) {
     if (message.action === "page-identity") {
       // Cheap page-state check (no transcript fetching) — the popup uses it to
       // wait for the page to settle and to detect SPA navigation races.
+      const isTwitter = window.location.href.includes("twitter.com") || window.location.href.includes("x.com");
+      const twitterReady = !isTwitter || !!document.querySelector(
+        'article[data-testid="tweet"], [data-testid="twitterArticleReadView"], [data-testid="twitterArticleRichTextView"], [data-testid="tweetText"], [data-testid="card.layoutLarge.detail"], [data-testid="primaryColumn"] [role="region"], [data-testid="error-detail"]'
+      );
       sendResponse({
         success: true,
         url: window.location.href,
         title: document.title,
         readyState: document.readyState,
+        twitterReady,
         // YouTube: the watch page shell has rendered (not the loading skeleton)
         youtubeReady: !window.location.href.includes("youtube.com/watch") ||
           !!document.querySelector("ytd-watch-flexy"),
@@ -71,11 +76,17 @@ if (!window.__nutegg_listener_attached) {
 
     if (message.action === "nutegg-seek") {
       // Seek the page's video to the given timestamp (seconds) — used by the
-      // clickable Chapter Map in the popup.
-      const video = document.querySelector("video");
+      // clickable Chapter Map and Q&A timestamp pills in the popup.
+      const video =
+        document.querySelector(".html5-main-video") ||
+        document.querySelector("video.video-stream") ||
+        document.querySelector("video");
       if (video) {
-        video.currentTime = message.seconds;
-        video.play?.();
+        const secs = Number(message.seconds);
+        if (!isNaN(secs)) {
+          video.currentTime = secs;
+          video.play?.().catch(() => {});
+        }
         sendResponse({ success: true });
       } else {
         sendResponse({ success: false, error: "No video element found" });
@@ -83,21 +94,61 @@ if (!window.__nutegg_listener_attached) {
       return false;
     }
 
-    if (message.action === "extract-content") {
-      try {
-        const result = extractContent();
-        // If the result is a promise (e.g. YouTube with async caption fetch), await it
-        if (result instanceof Promise) {
-          result
-            .then((content) => sendResponse({ success: true, content }))
-            .catch((err) => sendResponse({ success: false, error: err.message }));
-          return true; // Keep channel open for async
+    if (message.action === "nutegg-scroll-to") {
+      const heading = (message.heading || "").trim().toLowerCase();
+      const quote = (message.quote || "").trim().toLowerCase();
+      let matchedEl = null;
+
+      if (heading) {
+        const headings = document.querySelectorAll("h1, h2, h3, h4, h5, h6, [role='heading']");
+        for (const h of headings) {
+          const text = (h.textContent || "").trim().toLowerCase();
+          if (text === heading || text.includes(heading) || heading.includes(text)) {
+            matchedEl = h;
+            break;
+          }
         }
-        sendResponse({ success: true, content: result });
-      } catch (err) {
-        sendResponse({ success: false, error: err instanceof Error ? err.message : "Extraction failed" });
       }
-      return true;
+
+      if (!matchedEl && quote && quote.length >= 8 && document.body) {
+        const sample = quote.slice(0, 40);
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          if (node.textContent && node.textContent.toLowerCase().includes(sample)) {
+            matchedEl = node.parentElement;
+            break;
+          }
+        }
+      }
+
+      if (matchedEl) {
+        matchedEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        const origTransition = matchedEl.style.transition;
+        const origBg = matchedEl.style.backgroundColor;
+        matchedEl.style.transition = "background-color 0.3s ease";
+        matchedEl.style.backgroundColor = "rgba(255, 230, 0, 0.4)";
+        setTimeout(() => {
+          matchedEl.style.backgroundColor = origBg;
+          setTimeout(() => { matchedEl.style.transition = origTransition; }, 300);
+        }, 2000);
+        sendResponse({ success: true });
+      } else {
+        sendResponse({ success: false, error: "Section not found on page" });
+      }
+      return false;
+    }
+
+    if (message.action === "extract-content") {
+      extractContent()
+        .then((content) => sendResponse({ success: true, content }))
+        .catch((err) =>
+          sendResponse({
+            success: false,
+            error: err instanceof Error ? err.message : "Extraction failed",
+          })
+        );
+      return true; // Keep channel open for async
     }
   });
 }
