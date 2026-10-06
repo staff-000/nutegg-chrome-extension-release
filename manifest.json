@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
   "default_locale": "en",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "__MSG_extensionDescription__",
   "permissions": [
     "activeTab",
@@ -21,7 +21,14 @@
     "https://api.deepseek.com/*",
     "https://api.moonshot.cn/*",
     "https://open.bigmodel.cn/*",
-    "https://dashscope.aliyuncs.com/*"
+    "https://dashscope.aliyuncs.com/*",
+    "https://api.bilibili.com/*",
+    "https://*.hdslb.com/*",
+    "https://*.douyin.com/*",
+    "https://*.douyinvod.com/*",
+    "https://*.bytecdn.cn/*",
+    "https://*.ibytedtos.com/*",
+    "https://*.bytedance.com/*"
   ],
   "action": {
     "default_title": "__MSG_extensionActionTitle__",
@@ -56,8 +63,13 @@
         "src/content/utils.js",
         "src/content/extractors/youtube.js",
         "src/content/extractors/twitter.js",
+        "src/content/extractors/chinese.js",
+        "src/content/extractors/discussion.js",
+        "src/content/extractors/forum.js",
+        "src/content/extractors/tiktok.js",
         "src/content/extractors/article.js",
         "src/content/extractors/generic.js",
+        "src/content/source-navigation.js",
         "src/content/content-script.js"
       ],
       "run_at": "document_idle"

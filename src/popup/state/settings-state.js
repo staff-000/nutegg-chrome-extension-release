@@ -6,7 +6,7 @@ const DEFAULT_ANALYSIS_SECTIONS = {
   titleVerdict: true,
   coreSummary: true,
   mindMap: true,
-  chapterMap: true,
+  discussion: false,
 };
 
 /**
@@ -18,9 +18,13 @@ class SettingsState {
     this.DEFAULT_ANALYSIS_SECTIONS = DEFAULT_ANALYSIS_SECTIONS;
 
     // User preferences
-    this.analysisMode = "fast"; // "fast" | "confirm"
+    this.analysisMode = "full"; // "full" | "preview"
     this.outputLanguage = "same-as-content";
     this.enabledSections = { ...DEFAULT_ANALYSIS_SECTIONS };
+    this.generateKnowledgeEntries = true;
+    this.debugInfo = false;
+    this.captureRetryCount = 3;
+    this.captureRetryDelayMs = 3000;
 
     // Obsidian server status
     this.serverOnline = false;
@@ -41,18 +45,22 @@ class SettingsState {
     try {
       const stored = await new Promise((resolve) => {
         chrome.storage?.local?.get?.(
-          ["analysisMode", "cachedMetrics", "enabledSections", "outputLanguage"],
+          ["analysisMode", "cachedMetrics", "enabledSections", "outputLanguage", "generateKnowledgeEntries", "popupDiagnostics", "debugInfo", "captureRetryCount", "captureRetryDelayMs"],
           resolve
         );
       });
-      if (stored?.analysisMode === "confirm" || stored?.analysisMode === "fast") {
+      if (stored?.analysisMode === "preview" || stored?.analysisMode === "full") {
         this.analysisMode = stored.analysisMode;
+      } else if (stored?.analysisMode === "confirm") {
+        this.analysisMode = "preview";
+      } else if (stored?.analysisMode === "fast") {
+        this.analysisMode = "full";
       }
+      this.generateKnowledgeEntries = stored?.generateKnowledgeEntries !== false;
+      this.debugInfo = stored?.debugInfo === true;
+      this.setCaptureRetries(stored || {});
       if (stored?.enabledSections) {
-        this.enabledSections = {
-          ...DEFAULT_ANALYSIS_SECTIONS,
-          ...stored.enabledSections,
-        };
+        this.enabledSections = Object.fromEntries(Object.keys(DEFAULT_ANALYSIS_SECTIONS).map(key => [key, typeof stored.enabledSections[key] === "boolean" ? stored.enabledSections[key] : DEFAULT_ANALYSIS_SECTIONS[key]]));
       }
       if (stored?.outputLanguage) {
         this.outputLanguage = stored.outputLanguage;
@@ -64,12 +72,20 @@ class SettingsState {
   }
 
   setAnalysisMode(mode, persist = true) {
-    if (mode === "confirm" || mode === "fast") {
-      this.analysisMode = mode;
+    const normalized = mode === "confirm" ? "preview" : mode === "fast" ? "full" : mode;
+    if (normalized === "preview" || normalized === "full") {
+      this.analysisMode = normalized;
       if (persist && typeof chrome !== "undefined" && chrome.storage?.local?.set) {
-        chrome.storage.local.set({ analysisMode: mode });
+        chrome.storage.local.set({ analysisMode: normalized });
       }
     }
+  }
+
+  setCaptureRetries(values = {}) {
+    const bounded = (value, fallback, min, max) => typeof value === 'number' && Number.isFinite(value)
+      ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
+    this.captureRetryCount = bounded(values.captureRetryCount ?? this.captureRetryCount, 3, 0, 10);
+    this.captureRetryDelayMs = bounded(values.captureRetryDelayMs ?? this.captureRetryDelayMs, 3000, 100, 10000);
   }
 
   setOutputLanguage(lang, persist = true) {
@@ -81,23 +97,34 @@ class SettingsState {
     }
   }
 
-  setEnabledSections(sections) {
-    if (sections && typeof sections === "object") {
-      this.enabledSections = {
-        ...DEFAULT_ANALYSIS_SECTIONS,
-        ...sections,
-      };
+  setGenerateKnowledgeEntries(enabled, persist = true) {
+    this.generateKnowledgeEntries = enabled !== false;
+    if (persist && typeof chrome !== "undefined") {
+      chrome.storage?.local?.set?.({ generateKnowledgeEntries: this.generateKnowledgeEntries });
     }
   }
 
-  async toggleSection(key, persist = true) {
-    const currentVal = this.enabledSections[key] !== false;
-    const activeCount = Object.values(this.enabledSections).filter(Boolean).length;
-    // Don't allow disabling the last active section
-    if (currentVal && activeCount <= 1) {
-      return false;
+  setEnabledSections(sections, persist = false) {
+    if (sections && typeof sections === "object") {
+      this.enabledSections = Object.fromEntries(Object.keys(DEFAULT_ANALYSIS_SECTIONS).map(key => [key, typeof sections[key] === "boolean" ? sections[key] : DEFAULT_ANALYSIS_SECTIONS[key]]));
+      if (persist && typeof chrome !== "undefined" && chrome.storage?.local?.set) {
+        chrome.storage.local.set({ enabledSections: { ...this.enabledSections } });
+      }
     }
-    this.enabledSections[key] = !currentVal;
+  }
+
+  getToggledSections(key, sections = this.enabledSections) {
+    const keys = key === "verdictSummary" ? ["titleVerdict", "coreSummary"] : [key];
+    if (keys.some(k => !(k in DEFAULT_ANALYSIS_SECTIONS))) return null;
+    const nextVal = !keys.every(k => (sections[k] ?? DEFAULT_ANALYSIS_SECTIONS[k]) === true);
+    const next = { ...sections, ...Object.fromEntries(keys.map(k => [k, nextVal])) };
+    return Object.keys(DEFAULT_ANALYSIS_SECTIONS).some(k => (next[k] ?? DEFAULT_ANALYSIS_SECTIONS[k]) === true) ? next : null;
+  }
+
+  async toggleSection(key, persist = true) {
+    const next = this.getToggledSections(key);
+    if (!next) return false;
+    this.enabledSections = next;
     if (persist && typeof chrome !== "undefined" && chrome.storage?.local?.set) {
       await chrome.storage.local.set({ enabledSections: { ...this.enabledSections } });
     }
@@ -119,10 +146,10 @@ class SettingsState {
 
   /**
    * Determine whether Chrome AI fallback mode is active for analysis or results.
-   * If resultOrMode is omitted, inspects active session.analysisResult or server connection status.
+   * Without a result, uses the global server connection status.
    */
   isChromeMode(resultOrMode, matchedEggsCount = 0) {
-    const res = resultOrMode || (typeof session !== "undefined" ? session.analysisResult : null);
+    const res = resultOrMode;
     const mode = typeof res === "string" ? res : res?.mode;
     if (mode === "chrome") return true;
     if (!this.serverOnline) {
@@ -146,4 +173,3 @@ if (typeof module !== "undefined" && module.exports) {
     DEFAULT_ANALYSIS_SECTIONS,
   };
 }
-

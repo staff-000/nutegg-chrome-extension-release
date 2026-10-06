@@ -11,6 +11,8 @@ function unwrapMindMapRoots(nodes) {
   while (
     Array.isArray(current) &&
     current.length === 1 &&
+    !current[0].time &&
+    !current[0].sources?.length &&
     Array.isArray(current[0].children) &&
     current[0].children.length > 0
   ) {
@@ -21,6 +23,8 @@ function unwrapMindMapRoots(nodes) {
 
 /** Render the Mind Map hierarchical concept tree. */
 function renderMindMap(nodes, container) {
+  const helpers = typeof require === "function" ? require("../helpers.js") : globalThis.NutEggHelpers;
+  const renderText = text => helpers.linkifyTimestamps(helpers.escapeHtml(String(text || "")));
   const target = container || (typeof mindmapTree !== "undefined" ? mindmapTree : (typeof document !== "undefined" ? document.getElementById("mindmap-tree") : null));
   if (!target) return;
   target.innerHTML = "";
@@ -57,13 +61,26 @@ function renderMindMap(nodes, container) {
 
     const nameEl = document.createElement("div");
     nameEl.className = "mindmap-node-name";
-    nameEl.textContent = node.name || "";
+    const hasTime = Boolean(
+      (typeof node.time === "string" && /^\d{1,3}:[0-5]\d(?::[0-5]\d)?$/.test(node.time)) ||
+      helpers.extractTimestamp?.(node.name) ||
+      /(?:^|[^\d:])\d{1,3}(?::\d{2}){1,2}(?:[^\d:]|$)/.test(node.name || '') ||
+      node.sources?.some(s => s && typeof s.ref === 'string' && /^\[?\d{1,3}(?::\d{2}){1,2}\]?$/.test(s.ref.trim()))
+    );
+    const source = node.sources?.find(s => s && typeof s.ref === 'string' && (s.sourceId || !/^\[?\d{1,3}(?::\d{2}){1,2}\]?$/.test(s.ref)) && (s.quote || s.sourceId || s.ref));
+    nameEl.innerHTML = renderText(node.name);
+    if (source && !hasTime) {
+      nameEl.insertAdjacentHTML("beforeend", ` <button type="button" class="source-pill source-section source-mindmap inline-timestamp" data-heading="${helpers.escapeHtml(source.ref)}" data-quote="${helpers.escapeHtml(source.quote || '')}" data-source-id="${helpers.escapeHtml(source.sourceId || '')}" title="${helpers.escapeHtml(t('jumpToSource'))}"><span class="source-icon">📍</span><span class="source-ref">${helpers.escapeHtml(t('jumpToSource'))}</span></button>`);
+    }
+    if (typeof node.time === "string" && /^\d{1,3}:[0-5]\d(?::[0-5]\d)?$/.test(node.time)) {
+      nameEl.insertAdjacentHTML("beforeend", " " + renderText(node.time));
+    }
     contentWrap.appendChild(nameEl);
 
     if (node.detail) {
       const detailEl = document.createElement("div");
       detailEl.className = "mindmap-node-detail";
-      detailEl.textContent = node.detail;
+      detailEl.innerHTML = renderText(node.detail);
       contentWrap.appendChild(detailEl);
     }
 
@@ -79,6 +96,7 @@ function renderMindMap(nodes, container) {
       nodeEl.appendChild(childrenContainer);
 
       const toggleBranch = (e) => {
+        if (e.target.closest?.(".source-pill")) return;
         e.stopPropagation();
         const isCollapsed = childrenContainer.classList.toggle("collapsed");
         const icon = toggleBtn.querySelector(".mindmap-toggle-icon");

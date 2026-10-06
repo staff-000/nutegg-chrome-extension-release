@@ -112,7 +112,7 @@ function timeToSeconds(time) {
 function linkifyTimestamps(escapedText) {
   if (!escapedText) return "";
   return escapedText.replace(
-    /(\[|\()(\d{1,2}(?::\d{2}){1,2})(\]|\))|(?:^|(\s))(\d{1,2}(?::\d{2}){1,2})(?=[.,!?\s]|$)/g,
+    /(\[|\()(\d{1,3}(?::\d{2}){1,2})(\]|\))|(?:^|(\s))(\d{1,3}(?::\d{2}){1,2})(?=[.,!?\s]|$)/g,
     (match, open, time1, close, space, time2) => {
       const time = time1 || time2;
       const leading = space || "";
@@ -176,14 +176,16 @@ function formatPublishedDate(raw) {
 }
 
 /**
- * Classify a page URL as "youtube", "bilibili", "tiktok", "twitter", or "webpage".
+ * Classify supported platform URLs; fall back to "webpage".
  */
 function detectPageTypeFromUrl(url) {
   if (!url) return "webpage";
   try {
     const host = new URL(url).hostname;
     if (host.includes("youtube.com") || host === "youtu.be") return "youtube";
-    if (host.includes("bilibili.com")) return "bilibili";
+    for (const [domain, type] of [["bilibili.com", "bilibili"], ["douyin.com", "douyin"], ["weibo.com", "weibo"], ["weibo.cn", "weibo"], ["zhihu.com", "zhihu"]]) {
+      if (host === domain || host.endsWith(`.${domain}`)) return type;
+    }
     if (host.includes("tiktok.com")) return "tiktok";
     if (host.includes("twitter.com") || host === "x.com") return "twitter";
   } catch {}
@@ -211,17 +213,17 @@ function countWords(text) {
 function isContentSuspiciouslyLow(wordCount, sourceType = "webpage") {
   if (typeof wordCount !== "number" || wordCount < 0) return false;
   const type = String(sourceType || "").toLowerCase();
-  if (type === "twitter") {
+  if (type === "twitter" || type === "weibo") {
     // Single tweets can be concise, but fewer than 5 words is suspicious
     return wordCount < 5;
   }
-  if (type === "youtube" || type === "bilibili" || type === "video") {
-    // Video descriptions/transcripts are normally 30+ words; fewer than 30 indicates missing transcript/description
-    return wordCount < 30;
+  if (isVideoMediaSource(type) || type === "video") {
+    // Very short video text may be only metadata or an incomplete transcript.
+    return wordCount < 200;
   }
   // Standard articles, documentation, blog posts, news, generic pages
-  // Under 50 words usually means only headers/navigation or placeholders were extracted
-  return wordCount < 50;
+  // Under 200 words may mean only headers/navigation or placeholders were extracted.
+  return wordCount < 200;
 }
 
 /**
@@ -259,6 +261,7 @@ function isVideoMediaSource(contentOrType) {
   if (typeof contentOrType === "string") {
     return VIDEO_MEDIA_SOURCES.has(contentOrType.toLowerCase());
   }
+  if (contentOrType.mediaType === "article") return false;
   if (contentOrType.mediaType === "video" || contentOrType.isVideo) {
     return true;
   }
@@ -277,9 +280,25 @@ function isTranscriptBlocked(extractedContent) {
     extractedContent.transcriptAvailable === false;
 }
 
-/**
- * Returns a non-null string prompt if the page or content is not ready for analysis.
- */
+/** One extraction notice for both the tab warning and the fetched-content preview. */
+function getExtractionWarning(content) {
+  if (!content) return null;
+  // A long description cannot substitute for a missing transcript.
+  if (isTranscriptBlocked(content)) return t("transcriptBlockedWarning");
+  if (['not_ready', 'transient'].includes(content.extractionStatus)) return t('captureRetryIncomplete');
+  const words = countWords(content.content || "");
+  const sourceType = isVideoMediaSource(content) ? "video" : content.sourceType;
+  return isContentSuspiciouslyLow(words, sourceType)
+    ? t("contentLowWarning", { count: words.toLocaleString() }) : null;
+}
+
+/** A selected egg needs its own result before knowledge can be hatched into it. */
+function selectedEggsNeedAnalysis(view) {
+  const analyzed = new Set((view.analysisResult?.eggResults || []).map(result => result.egg.split('/').pop()));
+  return [...(view.selectedEggs || [])].some(egg => !analyzed.has(egg.split('/').pop()));
+}
+
+/** Returns a prompt if the page or content is not ready for analysis. */
 function getAnalyzeNotReadyReason(sessionState, settingsState) {
   if (!sessionState) return null;
   if (sessionState.currentTabLoading) {
@@ -291,7 +310,7 @@ function getAnalyzeNotReadyReason(sessionState, settingsState) {
   if (!sessionState.extractedContent || !sessionState.extractedContent.content) {
     return t("pageOrContentNotReady");
   }
-  if (isTranscriptBlocked(sessionState.extractedContent)) {
+  if (isTranscriptBlocked(sessionState.extractedContent) && sessionState.enabledSections?.discussion !== true) {
     return t("transcriptUnavailableAnalyze");
   }
   if (settingsState && !settingsState.serverOnline) {
@@ -367,10 +386,12 @@ const NutEggHelpers = {
   provenanceFromExtraction,
   countWords,
   isContentSuspiciouslyLow,
+  getExtractionWarning,
   getVersionMismatchIssue,
   isVideoMediaSource,
   isTranscriptBlocked,
   getAnalyzeNotReadyReason,
+  selectedEggsNeedAnalysis,
   buildGitHubBugReportUrl,
   openGitHubBugReport,
 };

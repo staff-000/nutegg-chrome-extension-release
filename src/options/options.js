@@ -41,25 +41,26 @@ const aiPromptTextarea = document.getElementById("ai-prompt-textarea");
 const aiPromptResetBtn = document.getElementById("ai-prompt-reset-btn");
 
 // Content Analysis sections elements
-const sectionVerdict = document.getElementById("section-verdict");
-const sectionSummary = document.getElementById("section-summary");
+const sectionVerdictSummary = document.getElementById("section-verdict-summary");
 const sectionMindmap = document.getElementById("section-mindmap");
-const sectionChapters = document.getElementById("section-chapters");
+const sectionKnowledge = document.getElementById("section-knowledge");
+const sectionDiscussion = document.getElementById("section-discussion");
 const sectionsSaveBtn = document.getElementById("sections-save-btn");
 const sectionsStatus = document.getElementById("sections-status");
+const debugInfoEnabled = document.getElementById('debug-info-enabled');
 
 const DEFAULT_SECTIONS = {
   titleVerdict: true,
   coreSummary: true,
   mindMap: true,
-  chapterMap: true,
+  discussion: false,
 };
 
 let savedPromptOverrides = {};
 let activePromptKey = "contentAnalysis";
 
 function updateModeDesc(mode) {
-  if (mode === "confirm") {
+  if (mode === "preview" || mode === "confirm") {
     confirmDesc?.classList.add("active-desc");
     fastDesc?.classList.remove("active-desc");
   } else {
@@ -74,6 +75,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     "serverPort",
     "analysisMode",
     "enabledSections",
+    "generateKnowledgeEntries",
     "chromeAiEnabled",
     "chromeAiProvider",
     "chromeAiApiKey",
@@ -81,8 +83,32 @@ document.addEventListener("DOMContentLoaded", async () => {
     "chromeAiLocalEndpoint",
     "outputLanguage",
     "chromeAiPromptOverrides",
+    "debugInfo",
+    "captureRetryCount",
+    "captureRetryDelayMs",
   ]);
+  const captureSettings = new window.SettingsState();
+  captureSettings.setCaptureRetries(stored);
+  const retryCount = document.getElementById('capture-retry-count');
+  const retryDelay = document.getElementById('capture-retry-delay');
+  retryCount.value = captureSettings.captureRetryCount;
+  retryDelay.value = captureSettings.captureRetryDelayMs / 1000;
+  document.getElementById('capture-retry-save').addEventListener('click', async () => {
+    if (!retryCount.reportValidity() || !retryDelay.reportValidity()) return;
+    captureSettings.setCaptureRetries({ captureRetryCount: Number(retryCount.value), captureRetryDelayMs: Number(retryDelay.value) * 1000 });
+    await chrome.storage.local.set({ captureRetryCount: captureSettings.captureRetryCount, captureRetryDelayMs: captureSettings.captureRetryDelayMs });
+    const status = document.getElementById('capture-retry-status');
+    status.textContent = t('captureRetrySaved');
+    status.className = 'test-result ok';
+    setTimeout(() => {
+      status.classList.add('hidden');
+    }, 2500);
+  });
   savedPromptOverrides = stored.chromeAiPromptOverrides || {};
+  if (debugInfoEnabled) {
+    debugInfoEnabled.checked = stored.debugInfo === true;
+    debugInfoEnabled.addEventListener('change', () => chrome.storage.local.set({ debugInfo: debugInfoEnabled.checked }));
+  }
 
   // Initialize i18n following browser language
   window.NutEggI18n?.initI18n();
@@ -93,7 +119,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   portInput.value = port;
   portDisplay.textContent = port;
 
-  const mode = stored.analysisMode || "fast";
+  const rawMode = stored.analysisMode || "full";
+  const mode = rawMode === "confirm" ? "preview" : rawMode === "fast" ? "full" : rawMode;
   if (modeSelect) {
     modeSelect.value = mode;
     updateModeDesc(mode);
@@ -117,7 +144,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // 2. Content Analysis Sections initialization
-  initSectionsSettings(stored.enabledSections);
+  initSectionsSettings(stored.enabledSections, stored.generateKnowledgeEntries);
 
   // 3. AI Settings initialization
   initAiSettings(stored);
@@ -460,7 +487,7 @@ async function handleSave() {
     return;
   }
 
-  const mode = modeSelect ? modeSelect.value : "fast";
+  const mode = modeSelect ? modeSelect.value : "full";
   await chrome.storage.local.set({ serverPort: port, analysisMode: mode });
   // Notify background
   await chrome.runtime.sendMessage({ action: "set-port", port });
@@ -527,27 +554,26 @@ function showResult(msg, type) {
   testResult.classList.remove("hidden");
 }
 
-function initSectionsSettings(savedSections) {
+function initSectionsSettings(savedSections, savedGenerateKnowledgeEntries) {
   const sections = { ...DEFAULT_SECTIONS, ...(savedSections || {}) };
-  if (sectionVerdict) sectionVerdict.checked = sections.titleVerdict !== false;
-  if (sectionSummary) sectionSummary.checked = sections.coreSummary !== false;
+  if (sectionVerdictSummary) sectionVerdictSummary.checked = sections.titleVerdict !== false && sections.coreSummary !== false;
   if (sectionMindmap) sectionMindmap.checked = sections.mindMap !== false;
-  if (sectionChapters) sectionChapters.checked = sections.chapterMap !== false;
+  if (sectionKnowledge) sectionKnowledge.checked = savedGenerateKnowledgeEntries !== false;
+  if (sectionDiscussion) sectionDiscussion.checked = sections.discussion === true;
 
-  const checkboxes = [
-    sectionVerdict,
-    sectionSummary,
+  const contentCheckboxes = [
+    sectionVerdictSummary,
     sectionMindmap,
-    sectionChapters,
+    sectionDiscussion,
   ].filter(Boolean);
 
-  function getActiveCount() {
-    return checkboxes.filter((cb) => cb.checked).length;
+  function getActiveContentCount() {
+    return contentCheckboxes.filter((cb) => cb.checked).length;
   }
 
-  checkboxes.forEach((cb) => {
+  contentCheckboxes.forEach((cb) => {
     cb.addEventListener("change", () => {
-      if (getActiveCount() === 0) {
+      if (getActiveContentCount() === 0) {
         cb.checked = true;
         showSectionStatus(t("atLeastOneSection"), "error");
         setTimeout(() => {
@@ -558,17 +584,21 @@ function initSectionsSettings(savedSections) {
   });
 
   sectionsSaveBtn?.addEventListener("click", async () => {
-    if (getActiveCount() === 0) {
+    if (getActiveContentCount() === 0) {
       showSectionStatus(t("atLeastOneSection"), "error");
       return;
     }
     const newConfig = {
-      titleVerdict: sectionVerdict ? sectionVerdict.checked : true,
-      coreSummary: sectionSummary ? sectionSummary.checked : true,
+      titleVerdict: sectionVerdictSummary ? sectionVerdictSummary.checked : true,
+      coreSummary: sectionVerdictSummary ? sectionVerdictSummary.checked : true,
       mindMap: sectionMindmap ? sectionMindmap.checked : true,
-      chapterMap: sectionChapters ? sectionChapters.checked : true,
+      discussion: sectionDiscussion ? sectionDiscussion.checked : false,
     };
-    await chrome.storage.local.set({ enabledSections: newConfig });
+    const genKnowledge = sectionKnowledge ? sectionKnowledge.checked : true;
+    await chrome.storage.local.set({
+      enabledSections: newConfig,
+      generateKnowledgeEntries: genKnowledge,
+    });
     showSectionStatus(t("sectionPreferencesSaved"), "ok");
     setTimeout(() => {
       sectionsStatus?.classList.add("hidden");

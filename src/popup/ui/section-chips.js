@@ -29,15 +29,15 @@ class SectionChipsComponent {
     this.reanalyzeSectionsBody = getEl("reanalyze-sections-body");
     this.reanalyzeSectionsBadge = getEl("reanalyze-sections-badge");
 
-    this.chipVerdict = getEl("chip-verdict");
-    this.chipSummary = getEl("chip-summary");
+    this.chipVerdictSummary = getEl("chip-verdict-summary");
+    this.chipDiscussion = getEl("chip-discussion");
+    this.reanalyzeChipDiscussion = getEl("reanalyze-chip-discussion");
     this.chipMindmap = getEl("chip-mindmap");
-    this.chipChapters = getEl("chip-chapters");
+    this.chipKnowledge = getEl("chip-knowledge");
 
-    this.reanalyzeChipVerdict = getEl("reanalyze-chip-verdict");
-    this.reanalyzeChipSummary = getEl("reanalyze-chip-summary");
+    this.reanalyzeChipVerdictSummary = getEl("reanalyze-chip-verdict-summary");
     this.reanalyzeChipMindmap = getEl("reanalyze-chip-mindmap");
-    this.reanalyzeChipChapters = getEl("reanalyze-chip-chapters");
+    this.reanalyzeChipKnowledge = getEl("reanalyze-chip-knowledge");
   }
 
   init(options = {}) {
@@ -65,31 +65,19 @@ class SectionChipsComponent {
       this.reanalyzeSectionsBadge = options.reanalyzeSectionsBadge;
     }
 
-    if (options.chipVerdict) this.chipVerdict = options.chipVerdict;
-    if (options.chipSummary) this.chipSummary = options.chipSummary;
+    if (options.chipVerdictSummary) this.chipVerdictSummary = options.chipVerdictSummary;
+    if (options.reanalyzeChipVerdictSummary) this.reanalyzeChipVerdictSummary = options.reanalyzeChipVerdictSummary;
     if (options.chipMindmap) this.chipMindmap = options.chipMindmap;
-    if (options.chipChapters) this.chipChapters = options.chipChapters;
 
-    if (options.chipReVerdict || options.reanalyzeChipVerdict) {
-      this.reanalyzeChipVerdict = options.chipReVerdict || options.reanalyzeChipVerdict;
-    }
-    if (options.chipReSummary || options.reanalyzeChipSummary) {
-      this.reanalyzeChipSummary = options.chipReSummary || options.reanalyzeChipSummary;
-    }
     if (options.chipReMindmap || options.reanalyzeChipMindmap) {
       this.reanalyzeChipMindmap = options.chipReMindmap || options.reanalyzeChipMindmap;
-    }
-    if (options.chipReChapters || options.reanalyzeChipChapters) {
-      this.reanalyzeChipChapters = options.chipReChapters || options.reanalyzeChipChapters;
     }
 
     // Capture accordion toggle
     if (this.sectionsToggle && !this.sectionsToggle._hasAccordionListener) {
       this.sectionsToggle._hasAccordionListener = true;
       this.sectionsToggle.addEventListener("click", () => {
-        const isHidden = this.sectionsBody?.classList.toggle("hidden");
-        if (this.sectionsChevron) this.sectionsChevron.textContent = isHidden ? "▸" : "▾";
-        this.sectionsToggle?.setAttribute("aria-expanded", String(!isHidden));
+        options.onExpand?.('sectionsExpanded');
       });
     }
 
@@ -97,21 +85,19 @@ class SectionChipsComponent {
     if (this.reanalyzeSectionsToggle && !this.reanalyzeSectionsToggle._hasAccordionListener) {
       this.reanalyzeSectionsToggle._hasAccordionListener = true;
       this.reanalyzeSectionsToggle.addEventListener("click", () => {
-        const isHidden = this.reanalyzeSectionsBody?.classList.toggle("hidden");
-        if (this.reanalyzeSectionsChevron) this.reanalyzeSectionsChevron.textContent = isHidden ? "▸" : "▾";
-        this.reanalyzeSectionsToggle?.setAttribute("aria-expanded", String(!isHidden));
+        options.onExpand?.('reanalyzeSectionsExpanded');
       });
     }
 
     const allChips = [
-      { el: this.chipVerdict, key: "titleVerdict" },
-      { el: this.chipSummary, key: "coreSummary" },
+      { el: this.chipVerdictSummary, key: "verdictSummary" },
+      { el: this.chipDiscussion, key: "discussion" },
+      { el: this.reanalyzeChipDiscussion, key: "discussion" },
       { el: this.chipMindmap, key: "mindMap" },
-      { el: this.chipChapters, key: "chapterMap" },
-      { el: this.reanalyzeChipVerdict, key: "titleVerdict" },
-      { el: this.reanalyzeChipSummary, key: "coreSummary" },
+      { el: this.chipKnowledge, key: "generateKnowledgeEntries" },
+      { el: this.reanalyzeChipVerdictSummary, key: "verdictSummary" },
       { el: this.reanalyzeChipMindmap, key: "mindMap" },
-      { el: this.reanalyzeChipChapters, key: "chapterMap" },
+      { el: this.reanalyzeChipKnowledge, key: "generateKnowledgeEntries" },
     ];
 
     allChips.forEach(({ el, key }) => {
@@ -124,9 +110,10 @@ class SectionChipsComponent {
           await options.onToggle(key);
         } else if (options.onSectionToggle) {
           const current = this.enabledSections || {};
-          const currentVal = current[key] !== false;
+          const currentVal = key === "discussion" ? current[key] === true : current[key] !== false;
           const nextVal = !currentVal;
-          const newSections = { ...current, [key]: nextVal };
+          const keys = key === "verdictSummary" ? ["titleVerdict", "coreSummary"] : [key];
+          const newSections = { ...current, ...Object.fromEntries(keys.map(k => [k, nextVal])) };
           await options.onSectionToggle(key, nextVal, newSections);
         }
       };
@@ -134,26 +121,39 @@ class SectionChipsComponent {
     });
   }
 
-  updateUI(enabledSections = {}) {
+  renderPresentation(presentation) {
+    for (const [body, chevron, toggle, expanded] of [
+      [this.sectionsBody, this.sectionsChevron, this.sectionsToggle, presentation.sectionsExpanded],
+      [this.reanalyzeSectionsBody, this.reanalyzeSectionsChevron, this.reanalyzeSectionsToggle, presentation.reanalyzeSectionsExpanded],
+    ]) {
+      body?.classList.toggle('hidden', !expanded);
+      if (chevron) chevron.textContent = expanded ? '▾' : '▸';
+      toggle?.setAttribute('aria-expanded', String(!!expanded));
+    }
+  }
+
+  updateUI(enabledSections = {}, generateKnowledgeEntries = true) {
+    enabledSections = { ...enabledSections, generateKnowledgeEntries, verdictSummary: enabledSections.titleVerdict !== false && enabledSections.coreSummary !== false };
     this.enabledSections = enabledSections;
-    if (!this.chipVerdict && (this.root || typeof document !== "undefined")) {
+    if (!this.chipVerdictSummary && (this.root || typeof document !== "undefined")) {
       this.bindElements(this.root || document);
     }
 
     const map = [
-      { el: this.chipVerdict, key: "titleVerdict" },
-      { el: this.chipSummary, key: "coreSummary" },
+      { el: this.chipVerdictSummary, key: "verdictSummary" },
+      { el: this.chipDiscussion, key: "discussion" },
+      { el: this.reanalyzeChipDiscussion, key: "discussion" },
       { el: this.chipMindmap, key: "mindMap" },
-      { el: this.chipChapters, key: "chapterMap" },
-      { el: this.reanalyzeChipVerdict, key: "titleVerdict" },
-      { el: this.reanalyzeChipSummary, key: "coreSummary" },
+      { el: this.chipKnowledge, key: "generateKnowledgeEntries" },
+      { el: this.reanalyzeChipVerdictSummary, key: "verdictSummary" },
       { el: this.reanalyzeChipMindmap, key: "mindMap" },
-      { el: this.reanalyzeChipChapters, key: "chapterMap" },
+      { el: this.reanalyzeChipKnowledge, key: "generateKnowledgeEntries" },
     ];
 
     map.forEach(({ el, key }) => {
       if (!el) return;
-      const active = enabledSections[key] !== false;
+      const active = key === "discussion" ? enabledSections[key] === true : enabledSections[key] !== false;
+      el.setAttribute?.("aria-pressed", String(active));
       if (active) {
         el.classList.add("active");
         el.classList.remove("inactive");
@@ -163,12 +163,14 @@ class SectionChipsComponent {
       }
     });
 
-    const total = 4;
+    const hasKnowledgeChip = Boolean(this.chipKnowledge || this.reanalyzeChipKnowledge);
+    const hasDiscussionChip = Boolean(this.chipDiscussion || this.reanalyzeChipDiscussion);
+    const total = (hasKnowledgeChip ? 3 : 2) + (hasDiscussionChip ? 1 : 0);
     const activeCount = [
-      enabledSections.titleVerdict !== false,
-      enabledSections.coreSummary !== false,
+      enabledSections.verdictSummary,
       enabledSections.mindMap !== false,
-      enabledSections.chapterMap !== false,
+      ...(hasKnowledgeChip ? [generateKnowledgeEntries] : []),
+      ...(hasDiscussionChip ? [enabledSections.discussion === true] : []),
     ].filter(Boolean).length;
 
     const badgeText = `${activeCount}/${total}`;
@@ -184,4 +186,3 @@ _chipsScope.NutEggUI.SectionChipsComponent = SectionChipsComponent;
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { SectionChipsComponent };
 }
-

@@ -26,32 +26,38 @@ function cleanEggName(fileName) {
 function _renderCaptureEggsList(options = {}) {
   const listEl = options.captureEggsList || (typeof captureEggsList !== "undefined" ? captureEggsList : (typeof document !== "undefined" ? document.getElementById("capture-eggs-list") : null));
   const toggleEl = options.captureEggsToggle || (typeof captureEggsToggle !== "undefined" ? captureEggsToggle : (typeof document !== "undefined" ? document.getElementById("capture-eggs-toggle") : null));
-  const eggs = options.allEggs || (typeof allEggs !== "undefined" ? allEggs : (typeof window !== "undefined" ? window.allEggs : [])) || [];
-  const selected = options.preSelectedEggs || (typeof preSelectedEggs !== "undefined" ? preSelectedEggs : (typeof window !== "undefined" ? window.preSelectedEggs : null)) || new Set();
+  const accordionEl = options.captureEggsAccordion || (toggleEl?.closest?.(".sections-accordion") || (typeof document !== "undefined" ? document.getElementById("capture-eggs-accordion") : null));
+  const eggs = options.allEggs || [];
+  const selected = options.preSelectedEggs instanceof Set ? options.preSelectedEggs : new Set(options.preSelectedEggs || []);
   const onLabelUpdate = options.updateLabel || (typeof updateCaptureEggsLabel === "function" ? updateCaptureEggsLabel : null);
 
   if (!listEl || !toggleEl) return;
   if (eggs.length === 0) {
     toggleEl.classList.add("hidden");
+    if (accordionEl && accordionEl !== toggleEl) accordionEl.classList.add("hidden");
     return;
   }
   toggleEl.classList.remove("hidden");
+  if (accordionEl && accordionEl !== toggleEl) accordionEl.classList.remove("hidden");
   listEl.innerHTML = eggs
     .map((e) => {
       const checked = selected.has(e.fileName) ? "checked" : "";
       return `<label class="egg-row">
         <input type="checkbox" data-capture-egg="${_eggEscapeHtml(e.fileName)}" ${checked} />
-        <span class="egg-row-name">${_eggEscapeHtml(e.fileName)}</span>
+        <span class="egg-row-name">${_eggEscapeHtml(cleanEggName(e.fileName))}</span>
         <span class="egg-row-desc">${_eggEscapeHtml(e.description || e.topic || "")}</span>
       </label>`;
     })
     .join("");
 
   listEl.querySelectorAll("input").forEach((cb) => {
+    cb.addEventListener("click", (ev) => ev?.stopPropagation?.());
     cb.addEventListener("change", (ev) => {
+      ev?.stopPropagation?.();
       const name = ev.target.dataset.captureEgg;
       if (ev.target.checked) selected.add(name);
       else selected.delete(name);
+      options.onSelectChange?.(new Set(selected));
       if (onLabelUpdate) onLabelUpdate();
     });
   });
@@ -60,26 +66,25 @@ function _renderCaptureEggsList(options = {}) {
 
 function _updateCaptureEggsLabel(options = {}) {
   const labelEl = options.captureEggsLabel || (typeof captureEggsLabel !== "undefined" ? captureEggsLabel : (typeof document !== "undefined" ? document.getElementById("capture-eggs-label") : null));
-  const selected = options.preSelectedEggs || (typeof preSelectedEggs !== "undefined" ? preSelectedEggs : (typeof window !== "undefined" ? window.preSelectedEggs : null)) || new Set();
+  const selected = options.preSelectedEggs instanceof Set ? options.preSelectedEggs : new Set(options.preSelectedEggs || []);
   if (!labelEl) return;
   if (selected.size === 0) {
-    labelEl.textContent = t("autoDetect");
+    labelEl.textContent = "";
   } else if (selected.size === 1) {
-    const egg = [...selected][0].split("/").pop();
-    labelEl.textContent = `(${egg})`;
+    const rawEgg = [...selected][0];
+    labelEl.textContent = `(${cleanEggName(rawEgg)})`;
   } else {
     labelEl.textContent = t("countSelected", { count: selected.size });
   }
 }
 
 /**
- * Render the egg picker: the matched eggs are checked; changing any box
- * reveals the "Re-analyze with selected eggs" button.
+ * Render the selected eggs supplied by the store; changes dispatch new selections.
  */
 function _renderEggsSection(firstArg = [], options = {}) {
   const matchedEggs = Array.isArray(firstArg) ? firstArg : (firstArg?.matchedEggs || []);
   const opts = Array.isArray(firstArg) ? options : (firstArg || {});
-  const rawEggs = opts.allEggs || (typeof session !== "undefined" ? session.allEggs : null) || (typeof allEggs !== "undefined" ? allEggs : (typeof window !== "undefined" ? window.allEggs : [])) || [];
+  const rawEggs = opts.allEggs || [];
   const eggs = rawEggs.map((e) => (typeof e === "string" ? { fileName: e, description: "", topic: "" } : { ...e }));
   // Include matched eggs that are missing from the index list (index drift)
   for (const m of matchedEggs) {
@@ -95,8 +100,6 @@ function _renderEggsSection(firstArg = [], options = {}) {
   const chevronEl = opts.eggsToggleChevron || (typeof eggsToggleChevron !== "undefined" ? eggsToggleChevron : (typeof document !== "undefined" ? document.getElementById("eggs-toggle-chevron") : null));
   const errorEl = opts.eggsErrorEl || (typeof eggsErrorEl !== "undefined" ? eggsErrorEl : (typeof document !== "undefined" ? document.getElementById("eggs-error") : null));
   const toggleLabelEl = opts.eggsToggleLabel || (typeof eggsToggleLabel !== "undefined" ? eggsToggleLabel : (typeof document !== "undefined" ? document.getElementById("eggs-toggle-label") : null));
-  const reanalyzeBtnEl = opts.reanalyzeEggsBtn || (typeof reanalyzeEggsBtn !== "undefined" ? reanalyzeEggsBtn : (typeof document !== "undefined" ? document.getElementById("reanalyze-eggs-btn") : null));
-  const reanalyzeRefreshBtnEl = opts.reanalyzeEggsRefreshBtn || (typeof reanalyzeEggsRefreshBtn !== "undefined" ? reanalyzeEggsRefreshBtn : (typeof document !== "undefined" ? document.getElementById("reanalyze-eggs-refresh-btn") : null));
   const createFormEl = opts.eggsCreateForm || (typeof eggsCreateForm !== "undefined" ? eggsCreateForm : (typeof document !== "undefined" ? document.getElementById("eggs-create-form") : null));
   const createToggleEl = opts.eggsCreateToggle || (typeof eggsCreateToggle !== "undefined" ? eggsCreateToggle : (typeof document !== "undefined" ? document.getElementById("eggs-create-toggle") : null));
 
@@ -117,16 +120,7 @@ function _renderEggsSection(firstArg = [], options = {}) {
     return;
   }
 
-  if (typeof selectedEggs !== "undefined") {
-    selectedEggs = new Set(matchedEggs);
-  }
-  const currentSelected = opts.selectedEggs || (typeof session !== "undefined" ? session.selectedEggs : null) || (typeof selectedEggs !== "undefined" ? selectedEggs : (typeof window !== "undefined" ? window.selectedEggs : null)) || new Set();
-  if (currentSelected.size === 0 && Array.isArray(matchedEggs) && matchedEggs.length > 0) {
-    matchedEggs.forEach((m) => {
-      const name = typeof m === "string" ? m : m?.fileName;
-      if (name) currentSelected.add(name);
-    });
-  }
+  const currentSelected = new Set(opts.selectedEggs || []);
 
   if (sectionEl) sectionEl.classList.remove("hidden");
   const shouldExpand = opts.expand === true || (expandedEl && !expandedEl.classList.contains("hidden"));
@@ -139,13 +133,7 @@ function _renderEggsSection(firstArg = [], options = {}) {
   }
   if (errorEl) errorEl.classList.add("hidden");
   if (toggleLabelEl) {
-    if (opts.allRejected) {
-      toggleLabelEl.textContent = t("noneMatched");
-    } else {
-      toggleLabelEl.textContent = matchedEggs.length > 0
-        ? t("countMatched", { count: matchedEggs.length })
-        : t("noneMatched");
-    }
+    toggleLabelEl.textContent = matchedEggs.length > 0 ? t("countMatched", { count: matchedEggs.length }) : t("noneMatched");
   }
 
   if (listEl) {
@@ -164,25 +152,13 @@ function _renderEggsSection(firstArg = [], options = {}) {
         const name = ev.target.dataset.egg;
         if (ev.target.checked) currentSelected.add(name);
         else currentSelected.delete(name);
-        const stage = typeof analysisResult !== "undefined" ? analysisResult?.stage : null;
-        if (stage === "stage1") {
-          reanalyzeBtnEl?.classList.add("hidden");
-          reanalyzeRefreshBtnEl?.classList.add("hidden");
-        } else {
-          reanalyzeBtnEl?.classList.remove("hidden");
-          reanalyzeRefreshBtnEl?.classList.remove("hidden");
-        }
         if (opts.onSelectChange) {
-          opts.onSelectChange(name, ev.target.checked);
-        } else if (typeof updateStage1ProceedBtn === "function") {
-          updateStage1ProceedBtn();
+          opts.onSelectChange(new Set(currentSelected));
         }
       });
     });
   }
 
-  if (reanalyzeBtnEl) reanalyzeBtnEl.classList.add("hidden");
-  if (reanalyzeRefreshBtnEl) reanalyzeRefreshBtnEl.classList.add("hidden");
   if (createFormEl) createFormEl.classList.add("hidden");
   if (createToggleEl) {
     createToggleEl.classList.remove("hidden");
@@ -190,289 +166,150 @@ function _renderEggsSection(firstArg = [], options = {}) {
   }
 }
 
-function _renderEggKnowledge(firstArg = [], options = {}) {
-  const eggResults = Array.isArray(firstArg) ? firstArg : (firstArg?.eggResults || []);
-  const opts = Array.isArray(firstArg) ? options : (firstArg || {});
-  const sectionEl = opts.eggKnowledgeSection || (typeof eggKnowledgeSection !== "undefined" ? eggKnowledgeSection : (typeof document !== "undefined" ? document.getElementById("egg-knowledge-section") : null));
-  const contentEl = opts.eggKnowledgeContent || (typeof eggKnowledgeContent !== "undefined" ? eggKnowledgeContent : (typeof document !== "undefined" ? document.getElementById("egg-knowledge-content") : null));
-  const tabsBarEl = opts.eggTabsBar || (typeof eggTabsBar !== "undefined" ? eggTabsBar : (typeof document !== "undefined" ? document.getElementById("egg-tabs-bar") : null));
-  const hintEl = opts.eggKnowledgeHint || (typeof eggKnowledgeHint !== "undefined" ? eggKnowledgeHint : (typeof document !== "undefined" ? document.getElementById("egg-knowledge-hint") : null));
+const KIND_METADATA = {
+  insight: { icon: "💡", label: "Insight", className: "kind-insight" },
+  list: { icon: "📋", label: "Framework", className: "kind-list" },
+  answer: { icon: "💬", label: "Takeaway", className: "kind-answer" },
+};
 
-  if (!sectionEl || !contentEl) return;
+function _formatEntryMarkdown(rawText, linkify) {
+  if (!rawText) return "";
+  const lines = String(rawText).split("\n");
+  const processed = [];
+  for (const line of lines) {
+    let l = _eggEscapeHtml(line);
+    // Bold: **text**
+    l = l.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    // Inline code: `code`
+    l = l.replace(/`([^`]+)`/g, '<code class="delta-inline-code">$1</code>');
+    // Italic: *text*
+    l = l.replace(/(^|[^*])\*([^*]+)\*([^*]|$)/g, "$1<em>$2</em>$3");
 
-  const allRejected = opts.allRejected !== undefined
-    ? opts.allRejected
-    : (Array.isArray(eggResults) && eggResults.length > 0 && eggResults.every((r) => r.rejected));
-
-  if (!Array.isArray(eggResults) || eggResults.length === 0) {
-    if (opts.allRejected || opts.noEggMatched) {
-      sectionEl.classList.remove("hidden");
-      if (tabsBarEl) {
-        tabsBarEl.classList.add("hidden");
-        tabsBarEl.innerHTML = "";
-      }
-      if (hintEl) hintEl.textContent = t("allEggsRejectedHint");
-      contentEl.innerHTML = `
-        <div class="egg-status-banner banner-reject">
-          🚫 <strong>${t("allEggsRejectedTitle")}</strong> — ${t("allEggsRejectedDesc")}
-        </div>`;
-      return;
+    // Bullet lists: - item, * item, • item
+    const bulletMatch = l.match(/^\s*(?:[-*•]|\&\#8226;)\s+(.+)$/);
+    if (bulletMatch) {
+      processed.push(`<div class="delta-bullet-row"><span class="delta-bullet-dot">•</span><span class="delta-bullet-text">${linkify(bulletMatch[1])}</span></div>`);
+      continue;
     }
-    sectionEl.classList.add("hidden");
-    contentEl.innerHTML = "";
-    if (tabsBarEl) tabsBarEl.innerHTML = "";
+
+    // Numbered lists: 1. item
+    const numMatch = l.match(/^\s*(\d+)[.)]\s+(.+)$/);
+    if (numMatch) {
+      processed.push(`<div class="delta-bullet-row"><span class="delta-bullet-num">${numMatch[1]}.</span><span class="delta-bullet-text">${linkify(numMatch[2])}</span></div>`);
+      continue;
+    }
+
+    processed.push(linkify(l));
+  }
+  return processed.join("\n");
+}
+
+function _renderEggKnowledge(firstArg = [], options = {}) {
+  const raw = Array.isArray(firstArg) ? firstArg : firstArg?.eggResults;
+  const eggResults = Array.isArray(raw) ? raw : [];
+  const opts = Array.isArray(firstArg) ? options : firstArg;
+  const section = opts.eggKnowledgeSection || (typeof document !== "undefined" ? document.getElementById("egg-knowledge-section") : null);
+  const content = opts.eggKnowledgeContent || (typeof document !== "undefined" ? document.getElementById("egg-knowledge-content") : null);
+  const tabs = opts.eggTabsBar || (typeof document !== "undefined" ? document.getElementById("egg-tabs-bar") : null);
+  const hint = opts.eggKnowledgeHint || (typeof document !== "undefined" ? document.getElementById("egg-knowledge-hint") : null);
+  if (!section || !content) return;
+  if (!eggResults.length) {
+    section.classList.add("hidden"); content.innerHTML = "";
+    if (tabs) tabs.innerHTML = "";
     return;
   }
-
-  sectionEl.classList.remove("hidden");
-
-  // Determine active tab
-  const eggNames = eggResults.map((r) => r.egg);
-  let activeTab = opts.activeEggTab || (typeof activeEggTab !== "undefined" ? activeEggTab : (typeof window !== "undefined" ? window.activeEggTab : null));
-  if (!activeTab || (!eggNames.includes(activeTab) && activeTab !== "all")) {
-    const eggWithDeltas = eggResults.find((r) => (r.novelDelta || []).length > 0);
-    activeTab = eggWithDeltas ? eggWithDeltas.egg : eggResults[0].egg;
-    if (typeof activeEggTab !== "undefined") {
-      activeEggTab = activeTab;
-    }
-    if (typeof window !== "undefined") {
-      window.activeEggTab = activeTab;
-    }
+  section.classList.remove("hidden");
+  let active = opts.activeEggTab;
+  if (active !== "all" && !eggResults.some(r => r.egg === active)) active = eggResults[0].egg;
+  const count = r => (r.extractedEntries?.length || 0) + (r.keyQuestionAnswers?.length || 0);
+  const labels = { full: "readingFull", highlights: "readingHighlights", summary: "readingSummary", skip: "readingSkip", uncertain: "readingUncertain" };
+  const sources = globalThis.NutEggUI?.renderQaSources || globalThis.renderQaSources || (() => "");
+  const linkify = globalThis.NutEggHelpers?.linkifyTimestamps || (text => text);
+  if (hint) hint.textContent = t("eggsMatchedCount", { count: eggResults.length });
+  if (tabs) {
+    tabs.classList.toggle("hidden", eggResults.length < 2);
+    const total = eggResults.reduce((n, r) => n + count(r), 0);
+    tabs.innerHTML = eggResults.length < 2 ? "" : [...eggResults.map(r => ({ name: r.egg, label: cleanEggName(r.egg), count: count(r) })),
+      { name: "all", label: t("allEggsTab"), count: total }].map(tab =>
+      `<button type="button" class="egg-tab-btn${active === tab.name ? " active" : ""}" data-tab="${_eggEscapeHtml(tab.name)}"><span class="egg-tab-name">${_eggEscapeHtml(tab.label)}</span><span class="egg-tab-badge badge-tab-covered">${tab.count}</span></button>`).join("");
+    tabs.querySelectorAll(".egg-tab-btn").forEach(btn => btn.addEventListener("click", () => {
+      opts.onTabChange?.(btn.dataset.tab);
+      _renderEggKnowledge(eggResults, { ...opts, activeEggTab: btn.dataset.tab });
+    }));
   }
+  content.innerHTML = eggResults.map(r => {
+    const visible = active === "all" || active === r.egg;
+    const qa = (r.keyQuestionAnswers || []).map(answer => {
+      const ansFormatted = _formatEntryMarkdown(answer.answer, linkify);
+      const sourcesHtml = sources(answer.sources);
+      return `<div class="qa-item">
+        <div class="qa-question"><span class="qa-q-badge">Q</span> ${_eggEscapeHtml(answer.question)}</div>
+        <div class="qa-answer">${ansFormatted}</div>
+        ${sourcesHtml ? `<div class="entry-sources-footer">${sourcesHtml}</div>` : ""}
+      </div>`;
+    }).join("");
 
-  // Render Tabs (only if 2+ eggs)
-  if (eggResults.length > 1 && tabsBarEl) {
-    tabsBarEl.classList.remove("hidden");
-    if (hintEl) hintEl.textContent = allRejected ? t("allEggsRejectedHint") : t("eggsMatchedCount", { count: eggResults.length });
+    const entries = (r.extractedEntries || []).map(entry => {
+      const text = typeof entry === "string" ? entry : (entry?.content || "");
+      const rawKind = typeof entry === "object" && entry?.kind ? String(entry.kind).toLowerCase() : "insight";
+      const meta = KIND_METADATA[rawKind] || KIND_METADATA.insight;
+      const formatted = _formatEntryMarkdown(text, linkify);
+      const sourcesHtml = typeof entry === "object" ? sources(entry.sources) : "";
 
-    const totalNewCount = eggResults.reduce((acc, r) => acc + (r.novelDelta?.length || 0), 0);
+      return `<div class="delta-item delta-knowledge-entry ${meta.className}" data-kind="${_eggEscapeHtml(rawKind)}">
+        <div class="delta-header">
+          <span class="delta-kind-badge ${meta.className}">
+            <span class="kind-icon">${meta.icon}</span>
+            <span class="kind-label">${meta.label}</span>
+          </span>
+          <button type="button" class="entry-copy-btn" title="Copy entry" aria-label="Copy entry" data-content="${_eggEscapeHtml(text)}">
+            <span class="copy-icon">📋</span>
+            <span class="copy-feedback hidden">✓</span>
+          </button>
+        </div>
+        <div class="delta-content">${formatted}</div>
+        ${sourcesHtml ? `<div class="entry-sources-footer">${sourcesHtml}</div>` : ""}
+      </div>`;
+    }).join("");
 
-    const tabsHtml = eggResults
-      .map((r) => {
-        const newCount = (r.novelDelta || []).length;
-        let badgeClass = "badge-tab-covered";
-        let badgeText = "✓";
-        if (r.rejected) {
-          badgeClass = "badge-tab-reject";
-          badgeText = "✕";
-        } else if (newCount > 0) {
-          badgeClass = "badge-tab-new";
-          badgeText = `+${newCount}`;
+    const actionClass = r.readAction ? `action-${r.readAction}` : "action-uncertain";
+
+    return `<div class="egg-card${visible ? "" : " hidden"}" data-egg="${_eggEscapeHtml(r.egg)}">
+      <div class="egg-card-header"><span class="egg-card-title">${_eggEscapeHtml(cleanEggName(r.egg))}</span></div>
+      <div class="egg-status-banner ${actionClass}"><strong>${_eggEscapeHtml(t(labels[r.readAction] || labels.uncertain))}</strong> — ${_eggEscapeHtml(r.readVerdictReason || "")}${sources(r.readingSources)}</div>
+      ${qa ? `<div class="knowledge-subsection egg-qa-block"><div class="knowledge-subhead">${t("eggKeyQuestions", { count: r.keyQuestionAnswers.length })}</div>${qa}</div>` : ""}
+      ${entries ? `<div class="knowledge-subsection"><div class="knowledge-subhead"><span class="subhead-icon">🍃</span> <span>${t("eggResultsHeading", { count: r.extractedEntries.length })}</span></div>${entries}</div>` : ""}
+    </div>`;
+  }).join("");
+
+  content.querySelectorAll?.(".entry-copy-btn")?.forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const text = btn.getAttribute("data-content") || "";
+      if (!text) return;
+      try {
+        if (typeof navigator !== "undefined" && navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else if (typeof document !== "undefined") {
+          const textarea = document.createElement("textarea");
+          textarea.value = text;
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand("copy");
+          document.body.removeChild(textarea);
         }
-
-        const isActive = activeTab === r.egg ? " active" : "";
-        return `
-          <button type="button" class="egg-tab-btn${isActive}" data-tab="${_eggEscapeHtml(r.egg)}" title="${_eggEscapeHtml(r.egg)}">
-            <span class="egg-tab-name">${_eggEscapeHtml(cleanEggName(r.egg))}</span>
-            <span class="egg-tab-badge ${badgeClass}">${badgeText}</span>
-          </button>`;
-      })
-      .join("");
-
-    const isAllActive = activeTab === "all" ? " active" : "";
-    const allBadgeText = allRejected ? "✕" : (totalNewCount > 0 ? `+${totalNewCount}` : "✓");
-    const allBadgeClass = allRejected ? "badge-tab-reject" : (totalNewCount > 0 ? "badge-tab-new" : "badge-tab-covered");
-
-    tabsBarEl.innerHTML =
-      tabsHtml +
-      `
-      <button type="button" class="egg-tab-btn${isAllActive}" data-tab="all" title="${_eggEscapeHtml(t("viewAllEggs"))}">
-        <span class="egg-tab-name">📋 ${_eggEscapeHtml(t("allEggsTab"))}</span>
-        <span class="egg-tab-badge ${allBadgeClass}">${allBadgeText}</span>
-      </button>`;
-
-    // Tab click listeners
-    tabsBarEl.querySelectorAll(".egg-tab-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const nextTab = btn.dataset.tab;
-        if (typeof activeEggTab !== "undefined") {
-          activeEggTab = nextTab;
-        }
-        if (typeof window !== "undefined") {
-          window.activeEggTab = nextTab;
-        }
-        activeTab = nextTab;
-        if (opts.onTabChange) {
-          opts.onTabChange(nextTab);
-        }
-        _renderEggKnowledge(eggResults, {
-          ...opts,
-          activeEggTab: nextTab,
-        });
-      });
-    });
-  } else if (tabsBarEl) {
-    tabsBarEl.classList.add("hidden");
-    tabsBarEl.innerHTML = "";
-    if (hintEl) {
-      hintEl.textContent = allRejected
-        ? `(${cleanEggName(eggResults[0]?.egg)} — ${t("noneMatched")})`
-        : `(${cleanEggName(eggResults[0]?.egg)})`;
-    }
-    if (typeof activeEggTab !== "undefined") {
-      activeEggTab = eggResults[0]?.egg;
-    }
-    if (typeof window !== "undefined") {
-      window.activeEggTab = eggResults[0]?.egg;
-    }
-  }
-
-  const allRejectedBanner = allRejected
-    ? `<div class="egg-status-banner banner-reject" style="margin-bottom: 12px;">
-        🚫 <strong>${t("allEggsRejectedTitle")}</strong> — ${t("allEggsRejectedDesc")}
-      </div>`
-    : "";
-
-  // Render Egg Cards
-  contentEl.innerHTML = allRejectedBanner + eggResults
-    .map((r) => {
-      const isVisible = activeTab === "all" || activeTab === r.egg;
-      const hideClass = isVisible ? "" : " hidden";
-      const newDeltas = r.novelDelta || [];
-      const redundantDeltas = r.redundantEntries || [];
-      const existingKnowledge = (r.existingKnowledge || "").trim();
-      const qaItems = r.keyQuestionAnswers || [];
-
-      let statusHeader = "";
-      if (eggResults.length > 1 && activeTab === "all") {
-        statusHeader = `
-          <div class="egg-card-header">
-            <span class="egg-card-title">📄 ${_eggEscapeHtml(cleanEggName(r.egg))}</span>
-            <span class="egg-card-file">${_eggEscapeHtml(r.egg)}</span>
-          </div>`;
-      }
-
-      let statusNote = "";
-      if (r.rejected) {
-        statusNote = `
-          <div class="egg-status-banner banner-reject">
-            ${t("rejectedByEgg", { reason: _eggEscapeHtml(r.rejectReason || t("outOfScope")) })}
-          </div>`;
-      } else if (newDeltas.length === 0 && redundantDeltas.length > 0) {
-        statusNote = `
-          <div class="egg-status-banner banner-covered">
-            ${t("fullyCoveredNotice")}
-          </div>`;
-      } else if (newDeltas.length === 0 && qaItems.length === 0) {
-        statusNote = `
-          <div class="egg-status-banner banner-covered">
-            ${t("noNewKnowledgeNotice")}
-          </div>`;
-      }
-
-      let newHtml = "";
-      if (newDeltas.length > 0) {
-        newHtml = `
-          <div class="knowledge-subsection">
-            <div class="knowledge-subhead new-subhead">${t("newInsightsHeading", { count: newDeltas.length })}</div>
-            ${newDeltas
-              .map(
-                (d) => `
-                <div class="delta-item is-new">
-                  <div class="delta-header">
-                    <span class="delta-badge badge-new">${t("badgeNewEntry")}</span>
-                    <span class="delta-parent">${d.parent ? t("unprocessedParent", { parent: _eggEscapeHtml(d.parent) }) : t("unprocessedOnly")}</span>
-                  </div>
-                  <div class="delta-content">${_eggEscapeHtml(d.content)}</div>
-                </div>`
-              )
-              .join("")}
-          </div>`;
-      }
-
-      let qaHtml = "";
-      if (qaItems.length > 0) {
-        const linkify = (typeof linkifyTimestamps === "function" ? linkifyTimestamps : null)
-          || globalThis.NutEggHelpers?.linkifyTimestamps
-          || globalThis.linkifyTimestamps
-          || ((t) => t);
-        const renderSources = (typeof renderQaSources === "function" ? renderQaSources : null)
-          || globalThis.NutEggUI?.renderQaSources
-          || globalThis.renderQaSources
-          || (() => "");
-        qaHtml = `
-          <div class="knowledge-subsection egg-qa-block">
-            <div class="knowledge-subhead qa-subhead">${t("eggKeyQuestions", { count: qaItems.length })}</div>
-            ${qaItems
-              .map(
-                (qa) => `
-                <div class="qa-item">
-                  <div class="qa-question">Q: ${_eggEscapeHtml(qa.question)}</div>
-                  <div class="qa-answer">${linkify(_eggEscapeHtml(qa.answer))}</div>
-                  ${renderSources(qa.sources)}
-                </div>`
-              )
-              .join("")}
-          </div>`;
-      }
-
-      let redundantHtml = "";
-      if (redundantDeltas.length > 0) {
-        redundantHtml = `
-          <div class="existing-tree-container">
-            <div class="existing-tree-header">
-              <span class="existing-tree-title">${t("alreadyCoveredHeading", { count: redundantDeltas.length })}</span>
-              <button type="button" class="covered-toggle">${t("viewCovered")}</button>
-            </div>
-            <div class="covered-body hidden">
-              ${redundantDeltas
-                .map(
-                  (d) => `
-                  <div class="delta-item is-covered">
-                    <div class="delta-header">
-                      <span class="delta-badge badge-covered">${t("badgeCovered")}</span>
-                      <span class="delta-parent">${d.existingParent ? t("underParent", { parent: _eggEscapeHtml(d.existingParent) }) : t("alreadyKnown")}</span>
-                    </div>
-                    <div class="delta-content">${_eggEscapeHtml(d.content)}</div>
-                  </div>`
-                )
-                .join("")}
-            </div>
-          </div>`;
-      }
-
-      let treeHtml = "";
-      if (existingKnowledge) {
-        treeHtml = `
-          <div class="existing-tree-container">
-            <div class="existing-tree-header">
-              <span class="existing-tree-title">${t("currentKnowledgeInEgg")}</span>
-              <button type="button" class="existing-tree-toggle">${t("viewTree")}</button>
-            </div>
-            <div class="existing-tree-body hidden">${_eggEscapeHtml(existingKnowledge)}</div>
-          </div>`;
-      }
-
-      return `
-        <div class="egg-card${hideClass}" data-egg="${_eggEscapeHtml(r.egg)}">
-          ${statusHeader}
-          ${statusNote}
-          ${newHtml}
-          ${qaHtml}
-          ${redundantHtml}
-          ${treeHtml}
-        </div>`;
-    })
-    .join("");
-
-  // Wire covered toggles
-  contentEl.querySelectorAll(".covered-toggle").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const body = btn.closest(".existing-tree-container")?.querySelector(".covered-body");
-      if (body) {
-        const isHidden = body.classList.toggle("hidden");
-        btn.textContent = isHidden ? t("viewCovered") : t("hideCovered");
-      }
-    });
-  });
-
-  // Wire tree toggles
-  contentEl.querySelectorAll(".existing-tree-toggle").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const body = btn.closest(".existing-tree-container")?.querySelector(".existing-tree-body");
-      if (body) {
-        const isHidden = body.classList.toggle("hidden");
-        btn.textContent = isHidden ? t("viewTree") : t("hideTree");
+        btn.classList.add("copied");
+        const icon = btn.querySelector(".copy-icon");
+        const feedback = btn.querySelector(".copy-feedback");
+        if (icon) icon.classList.add("hidden");
+        if (feedback) feedback.classList.remove("hidden");
+        setTimeout(() => {
+          btn.classList.remove("copied");
+          if (icon) icon.classList.remove("hidden");
+          if (feedback) feedback.classList.add("hidden");
+        }, 1500);
+      } catch (err) {
+        console.warn("[NutEgg] Copy failed:", err);
       }
     });
   });
@@ -502,8 +339,6 @@ class EggsComponent {
     this.eggsToggleChevron = getEl("eggs-toggle-chevron");
     this.eggsExpanded = getEl("eggs-expanded");
     this.eggsList = getEl("eggs-list");
-    this.reanalyzeEggsBtn = getEl("reanalyze-eggs-btn");
-    this.reanalyzeEggsRefreshBtn = getEl("reanalyze-eggs-refresh-btn");
     this.eggsErrorEl = getEl("eggs-error");
     this.eggsCreateToggle = getEl("eggs-create-toggle");
     this.eggsCreateForm = getEl("eggs-create-form");
@@ -511,6 +346,7 @@ class EggsComponent {
     this.eggsNewDesc = getEl("eggs-new-desc");
     this.eggsCreateBtn = getEl("eggs-create-btn");
     this.eggsCreateCancelBtn = getEl("eggs-create-cancel-btn");
+    this.captureEggsAccordion = getEl("capture-eggs-accordion");
     this.captureEggsToggle = getEl("capture-eggs-toggle");
     this.captureEggsLabel = getEl("capture-eggs-label");
     this.captureEggsChevron = getEl("capture-eggs-chevron");
@@ -556,13 +392,20 @@ class EggsComponent {
   setCreateButtonLoading(isLoading) {
     const loadingText = t("creatingEgg") || t("creating") || "Creating…";
     const normalText = t("createEggBtn") || "Create Egg";
+    const title = isLoading ? t("operationInProgressHint") : "";
     if (this.eggsCreateBtn) {
       this.eggsCreateBtn.disabled = Boolean(isLoading);
       this.eggsCreateBtn.textContent = isLoading ? loadingText : normalText;
+      this.eggsCreateBtn.title = title;
+      if (title) this.eggsCreateBtn.setAttribute?.("data-tooltip", title);
+      else this.eggsCreateBtn.removeAttribute?.("data-tooltip");
     }
     if (this.createEggBtn) {
       this.createEggBtn.disabled = Boolean(isLoading);
       this.createEggBtn.textContent = isLoading ? loadingText : normalText;
+      this.createEggBtn.title = title;
+      if (title) this.createEggBtn.setAttribute?.("data-tooltip", title);
+      else this.createEggBtn.removeAttribute?.("data-tooltip");
     }
   }
 
@@ -571,26 +414,6 @@ class EggsComponent {
     this.clearNewEggInput();
     this.clearError();
     this.setCreateButtonLoading(false);
-  }
-
-  setReanalyzeLoading(isLoading, text = "") {
-    if (this.reanalyzeEggsBtn) {
-      this.reanalyzeEggsBtn.disabled = Boolean(isLoading);
-      if (text) this.reanalyzeEggsBtn.textContent = text;
-    }
-    if (this.reanalyzeEggsRefreshBtn) {
-      this.reanalyzeEggsRefreshBtn.disabled = Boolean(isLoading);
-    }
-  }
-
-  setReanalyzeEggsRefreshLoading(isLoading) {
-    if (!this.reanalyzeEggsRefreshBtn) return;
-    this.reanalyzeEggsRefreshBtn.disabled = Boolean(isLoading);
-    if (isLoading) {
-      this.reanalyzeEggsRefreshBtn.classList.add("rotating");
-    } else {
-      this.reanalyzeEggsRefreshBtn.classList.remove("rotating");
-    }
   }
 
   showError(msg) {
@@ -632,9 +455,11 @@ class EggsComponent {
     if (expanded) {
       this.captureEggsArea?.classList.remove("hidden");
       if (this.captureEggsChevron) this.captureEggsChevron.textContent = "▾";
+      this.captureEggsToggle?.setAttribute?.("aria-expanded", "true");
     } else {
       this.captureEggsArea?.classList.add("hidden");
       if (this.captureEggsChevron) this.captureEggsChevron.textContent = "▸";
+      this.captureEggsToggle?.setAttribute?.("aria-expanded", "false");
     }
   }
 
@@ -655,6 +480,7 @@ class EggsComponent {
     return _renderCaptureEggsList({
       captureEggsList: this.captureEggsList,
       captureEggsToggle: this.captureEggsToggle,
+      captureEggsAccordion: this.captureEggsAccordion,
       captureEggsLabel: this.captureEggsLabel,
       updateLabel: () => this.updateCaptureLabel(options.preSelectedEggs),
       ...options,
@@ -670,8 +496,6 @@ class EggsComponent {
       eggsExpanded: this.eggsExpanded,
       eggsToggleChevron: this.eggsToggleChevron,
       eggsToggleLabel: this.eggsToggleLabel,
-      reanalyzeEggsBtn: this.reanalyzeEggsBtn,
-      reanalyzeEggsRefreshBtn: this.reanalyzeEggsRefreshBtn,
       eggsCreateForm: this.eggsCreateForm,
       eggsCreateToggle: this.eggsCreateToggle,
       eggsErrorEl: this.eggsErrorEl,
@@ -694,7 +518,6 @@ class EggsComponent {
   setNoEggVisible(visible) {
     if (visible) {
       this.noEggSection?.classList.remove("hidden");
-      this.clearNewEggInput();
     } else {
       this.noEggSection?.classList.add("hidden");
     }
@@ -710,72 +533,19 @@ class EggsComponent {
     }
   }
 
-  render(session, settings) {
-    const result = session?.analysisResult;
-    const isChrome = settings ? settings.isChromeMode() : false;
-    const isStage1 = session?.isStage1 ? session.isStage1(result) : (result?.stage === "stage1" || result?.mode === "chrome");
-
-    if (!result || isChrome) {
-      this.setNoEggVisible(false);
-      this.setKnowledgeVisible(false);
-      if (this.eggsSection) this.eggsSection.classList.add("hidden");
-      return;
-    }
-
-    const eggResults = isStage1 ? [] : (result.eggResults || []);
-    const allRejected = !isStage1 && (
-      (eggResults.length > 0 && eggResults.every((r) => r.rejected)) ||
-      (eggResults.length === 0 && Array.isArray(result.matchedEggs) && result.matchedEggs.length > 0)
-    );
-
-    if (session?.isReanalyzing) {
-      this.setNoEggVisible(false);
-      this.setKnowledgeVisible(false);
-    } else {
-      // No egg matched banner
-      const noEgg = (result.matchedEggs || []).length === 0 || allRejected;
-      this.setNoEggVisible(noEgg);
-
-      // Egg knowledge section
-      this.renderKnowledge({
-        eggResults,
-        activeEggTab: session?.activeEggTab,
-        allRejected,
-        noEggMatched: allRejected,
-        onTabChange: (tab) => {
-          if (session) session.activeEggTab = tab;
-        },
-      });
-    }
-
-    // Populate session.selectedEggs if empty and matched eggs exist
-    if (!allRejected && session?.selectedEggs && session.selectedEggs.size === 0 && Array.isArray(result.matchedEggs) && result.matchedEggs.length > 0) {
-      result.matchedEggs.forEach((egg) => session.selectedEggs.add(egg));
-    }
-
-    // Checklist of eggs
-    const allVaultEggs = session?.allEggs || settings?.allEggs || [];
-    this.renderSection({
-      matchedEggs: allRejected ? [] : (result.matchedEggs || []),
-      allEggs: allVaultEggs,
-      selectedEggs: session?.selectedEggs,
-      allRejected,
-      onSelectChange: () => {
-        if (typeof updateStage1ProceedBtn === "function") {
-          updateStage1ProceedBtn();
-        }
-      },
-    });
-
-    if (this.eggsSection) {
-      this.eggsSection.classList.remove("hidden");
-    }
-
-    const shouldExpand = isStage1 && (settings?.analysisMode === "confirm" || (result?.matchedEggs || []).length === 0);
-    if (shouldExpand) {
-      this.expandEggsList(true);
-    }
+  render(view, settings, callbacks = {}) {
+    const result = view.analysisResult;
+    const visible = !!result && !settings.isChromeMode(result);
+    this.eggsSection?.classList.toggle('hidden', !visible);
+    this.setNoEggVisible(visible && !view.isAnalyzing && !(result.matchedEggs || []).length && !view.selectedEggs?.size);
+    this.renderKnowledge(view.isStage1?.() ? [] : result?.eggResults || [], { activeEggTab: view.activeEggTab, onTabChange: callbacks.onTabChange });
+    this.setKnowledgeVisible(visible && !view.isAnalyzing && !view.isStage1?.() && !!result.eggResults?.length);
+    this.renderSection(result?.matchedEggs || [], { allEggs: view.allEggs, selectedEggs: view.selectedEggs, onSelectChange: callbacks.onSelectChange });
+    this.eggsSection?.classList.toggle('hidden', !visible);
+    this.expandEggsList(view.presentation?.eggsExpanded || (view.isStage1?.() && (settings.analysisMode === 'preview' || settings.analysisMode === 'confirm' || !(result?.matchedEggs || []).length)));
+    this.eggsSection?.classList.toggle('hidden', !visible);
   }
+
 }
 
 const _eggScope = typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : this);
@@ -787,4 +557,3 @@ if (typeof module !== "undefined" && module.exports) {
     EggsComponent,
   };
 }
-

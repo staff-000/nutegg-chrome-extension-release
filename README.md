@@ -1,14 +1,14 @@
 # 🌰/🥚 NutEgg Chrome Extension
 
 > **Read less, hatch more, save time.**  
-> Capture web pages, tweets, and YouTube videos, analyze novelty with AI, and curate knowledge directly into Obsidian.
+> Capture web pages, tweets, and YouTube videos, analyze content with AI, and curate knowledge directly into Obsidian.
 
 The NutEgg Chrome Extension works alongside your local [NutEgg Obsidian Plugin](https://github.com/staff-000/nutegg-obsidian-release) to capture what you browse and turn information overload into structured, personal knowledge.
 
 It is a two-part system that helps you stop mindless browsing and start building your knowledge base:
 
 - **Chrome Extension** — Grabs content from any webpage, tweet, or YouTube video (with transcripts). We call these raw captures **nuts** 🌰. 
-- **Obsidian Plugin** — Analyzes content with AI, evaluates novelty against your existing notes, and curates your knowledge base. We call these organized knowledge trees **eggs** 🥚.
+- **Obsidian Plugin** — Analyzes content with AI, answers your egg-specific questions and recommends what to read, and curates your knowledge base. We call these organized knowledge trees **eggs** 🥚.
 
 > 💬 Feedback and ideas are always welcome via [GitHub Issues](https://github.com/staff-000/nutegg/issues) or email at [staffhacker.000@gmail.com](mailto:staffhacker.000@gmail.com).
 
@@ -17,12 +17,18 @@ It is a two-part system that helps you stop mindless browsing and start building
 ## ✨ Features
 
 - **Smart Content Extraction**:
-  - **YouTube**: Full timestamped transcripts (including auto-generated captions) and clickable chapter maps.
+  - **YouTube**: Full timestamped transcripts (including auto-generated captions) and clickable mind maps with clickable timestamps.
   - **Twitter / X**: Full threads, authors, media badges, and engagement metrics.
   - **Articles & Blogs**: Medium, Substack, and generic web articles with ads and sidebars stripped.
+  - **Bilibili**: Video pages and watch-later lists, current multipart selection, chapters, and timestamped subtitles (manual before AI).
+  - **Douyin**: Video descriptions and available subtitles (manual before AI), plus image-post descriptions. Videos require an accessible transcript for analysis.
+  - **Weibo**: Current post text, accessible full long posts, author, and repost context.
+  - **Zhihu**: Questions with loaded answers, single-answer permalinks, and articles.
+
 - **"Should You Read It?" Verdict**:
   - Delivers a 3-sentence executive summary.
   - Gives a concrete recommendation on whether the content is worth your time based on your existing knowledge.
+  
 - **Title Verdict (Anti-Clickbait)**:
   - Directly answers the headline's question or hook in one sentence to save you time.
 - **🔍 Dual-Scope Q&A (Within vs. Beyond Content)**:
@@ -79,6 +85,9 @@ Connecting the extension to Obsidian is automatic:
 ---
 
 ## 🔗 Related Repositories
+
+Popup developers: see [tab state, async operations and diagnostics](src/popup/README.md)
+for ownership rules, race-condition tests and the concurrent-tab verification steps.
 
 - **Main Repository (Monorepo)**: [staff-000/nutegg](https://github.com/staff-000/nutegg)
 - **Obsidian Plugin Release**: [staff-000/nutegg-obsidian-release](https://github.com/staff-000/nutegg-obsidian-release)

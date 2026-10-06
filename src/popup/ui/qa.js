@@ -19,23 +19,13 @@ function _qaEscapeHtml(str) {
 
 function _qaExtractTimestamp(str) {
   if (typeof extractTimestamp === "function") return extractTimestamp(str);
-  if (typeof require !== "undefined") {
-    try {
-      return require("./chapters.js").extractTimestamp(str);
-    } catch { /* ignore */ }
-  }
   if (!str) return null;
-  const match = String(str).trim().match(/(?:^|[^\d:])(\d{1,2}(?::\d{2}){1,2})(?:[^\d:]|$)/);
+  const match = String(str).trim().match(/(?:^|[^\d:])(\d{1,3}(?::\d{2}){1,2})(?:[^\d:]|$)/);
   return match ? match[1] : null;
 }
 
 function _qaTimeToSeconds(time) {
   if (typeof timeToSeconds === "function") return timeToSeconds(time);
-  if (typeof require !== "undefined") {
-    try {
-      return require("./chapters.js").timeToSeconds(time);
-    } catch { /* ignore */ }
-  }
   if (typeof time === "number" && !isNaN(time)) return Math.floor(time);
   if (!time) return 0;
   const ts = _qaExtractTimestamp(time) || String(time).trim();
@@ -51,7 +41,7 @@ function _qaTimeToSeconds(time) {
 function linkifyTimestamps(escapedText) {
   if (!escapedText) return "";
   return escapedText.replace(
-    /(\[|\()(\d{1,2}(?::\d{2}){1,2})(\]|\))|(?:^|(\s))(\d{1,2}(?::\d{2}){1,2})(?=[.,!?\s]|$)/g,
+    /(\[|\()(\d{1,3}(?::\d{2}){1,2})(\]|\))|(?:^|(\s))(\d{1,3}(?::\d{2}){1,2})(?=[.,!?\s]|$)/g,
     (match, open, time1, close, space, time2) => {
       const time = time1 || time2;
       const leading = space || "";
@@ -71,12 +61,13 @@ function renderQaSources(sources) {
     .map((s) => {
       const ref = String(s.ref).trim();
       const timestamp = _qaExtractTimestamp(ref);
-      const isTime = timestamp !== null;
+      const isTime = !s.sourceId && /^\[?\d{1,3}(?::\d{2}){1,2}\]?$/.test(ref) && timestamp !== null;
       const pillClass = isTime ? "source-pill source-timestamp" : "source-pill source-section";
       const icon = isTime ? "⏱️" : "§";
       const dataAttr = isTime
         ? `data-time="${_qaEscapeHtml(timestamp)}"`
         : `data-heading="${_qaEscapeHtml(ref)}"`;
+      const sourceAttr = s.sourceId ? ` data-source-id="${_qaEscapeHtml(String(s.sourceId))}"` : "";
       const quoteText = s.quote ? String(s.quote).trim() : "";
       const quoteAttr = quoteText ? ` data-quote="${_qaEscapeHtml(quoteText)}"` : "";
       const quoteTitle = quoteText
@@ -87,11 +78,11 @@ function renderQaSources(sources) {
         ? `<span class="source-quote" title="${_qaEscapeHtml(quoteText)}">“${_qaEscapeHtml(quoteText)}”</span>`
         : "";
 
-      const displayRef = isTime && /^\[\d{1,2}(?::\d{2}){1,2}\]$/.test(ref) ? timestamp : ref;
+      const displayRef = isTime && /^\[\d{1,3}(?::\d{2}){1,2}\]$/.test(ref) ? timestamp : ref;
 
       return `
         <div class="qa-source-item">
-          <button type="button" class="${pillClass}" ${dataAttr}${quoteAttr}${quoteTitle}>
+          <button type="button" class="${pillClass}" ${dataAttr}${sourceAttr}${quoteAttr}${quoteTitle}>
             <span class="source-icon">${icon}</span>
             <span class="source-ref">${_qaEscapeHtml(displayRef)}</span>
           </button>
@@ -109,12 +100,8 @@ function _renderCustomQuestions(options = {}) {
   const listEl = options.customQuestionsList || (typeof customQuestionsList !== "undefined" ? customQuestionsList : (typeof document !== "undefined" ? document.getElementById("custom-questions-list") : null));
   const inputEl = options.followupInput || (typeof followupInput !== "undefined" ? followupInput : (typeof document !== "undefined" ? document.getElementById("followup-input") : null));
 
-  const questions = options.questions !== undefined
-    ? options.questions
-    : (typeof analysisResult !== "undefined" ? analysisResult?.customQuestionAnswers : []) || [];
-  const followUps = options.followUps !== undefined
-    ? options.followUps
-    : (typeof followUpQa !== "undefined" ? followUpQa : []) || [];
+  const questions = options.questions || [];
+  const followUps = options.followUps || [];
 
   const all = [...(questions || []), ...(followUps || [])];
 
@@ -161,7 +148,7 @@ function _renderCustomQuestions(options = {}) {
 
 /** All Q&A seen so far — context so follow-ups can refer back instead of repeating. */
 function buildPriorQa(res, qaList) {
-  const targetRes = res !== undefined ? res : (typeof analysisResult !== "undefined" ? analysisResult : null);
+  const targetRes = res || null;
   const targetQaList = qaList !== undefined ? qaList : (typeof followUpQa !== "undefined" ? followUpQa : []);
   const eggQa = (targetRes?.eggResults || []).flatMap(
     (r) => r.keyQuestionAnswers || []
@@ -177,13 +164,13 @@ function handleSourcePillClick(e, { onSeek, onScroll } = {}) {
   e.preventDefault();
   e.stopPropagation();
 
-  const timeVal = pill.dataset.time || _qaExtractTimestamp(pill.dataset.heading);
+  const timeVal = !pill.dataset.sourceId && pill.dataset.time;
   if (timeVal) {
     const seekHandler = onSeek || (typeof seekToChapter === "function" ? seekToChapter : null);
-    if (seekHandler) seekHandler(_qaTimeToSeconds(timeVal));
-  } else if (pill.dataset.heading) {
+    if (seekHandler) return seekHandler(_qaTimeToSeconds(timeVal));
+  } else if (pill.dataset.heading || pill.dataset.sourceId) {
     const scrollHandler = onScroll || (typeof scrollToSection === "function" ? scrollToSection : null);
-    if (scrollHandler) scrollHandler(pill.dataset.heading, pill.dataset.quote || "");
+    if (scrollHandler) return scrollHandler(pill.dataset.heading || "", pill.dataset.quote || "", pill.dataset.sourceId || "");
   }
 }
 
@@ -261,7 +248,7 @@ class QaComponent {
     }
 
     let questions = [];
-    let followUps = [];
+    let followUps = Array.isArray(secondArg) ? secondArg : [];
     if (firstArg && typeof firstArg === "object") {
       if (Array.isArray(firstArg.questions)) {
         questions = firstArg.questions;
@@ -296,7 +283,13 @@ class QaComponent {
   }
 
   setFollowupLoading(isLoading) {
-    if (this.followupBtn) this.followupBtn.disabled = isLoading;
+    if (this.followupBtn) {
+      this.followupBtn.disabled = isLoading;
+      const title = isLoading ? t("operationInProgressHint") : "";
+      this.followupBtn.title = title;
+      if (title) this.followupBtn.setAttribute?.("data-tooltip", title);
+      else this.followupBtn.removeAttribute?.("data-tooltip");
+    }
     if (this.followupInput) this.followupInput.disabled = isLoading;
   }
 
@@ -321,4 +314,3 @@ if (typeof module !== "undefined" && module.exports) {
     renderQaSources,
   };
 }
-

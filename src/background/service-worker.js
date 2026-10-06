@@ -1,6 +1,6 @@
 // NutEgg Background Service Worker
 
-importScripts("../../dist/ai-core.js");
+importScripts("../../dist/ai-core.js", "chinese-fetch.js");
 
 const {
   PROVIDER_CATALOG,
@@ -62,6 +62,17 @@ async function loadChromeAiSettings() {
 // --- Messages ---
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.action === 'get-debug-info') {
+    const scope = NutEggAI.normalizeAIDebugScope(message.debugScope);
+    if (!scope) { sendResponse({ unavailable: true, mode: message.mode }); return false; }
+    if (message.mode === 'chrome') { sendResponse({ ...NutEggAI.getAIDebugInfo(scope), mode: 'chrome' }); return false; }
+    (async () => {
+      const response = await fetch(`${await getServerUrl()}/debug-info?scope=${encodeURIComponent(scope)}`, { signal: AbortSignal.timeout(2500), cache: 'no-store' });
+      if (!response.ok) throw new Error('Debug info unavailable');
+      return { ...await response.json(), mode: 'obsidian' };
+    })().then(sendResponse).catch(() => sendResponse({ unavailable: true, mode: 'obsidian' }));
+    return true;
+  }
   if (message.action === "analyze") {
     handleAnalyze(message.payload)
       .then((r) => sendResponse(r))

@@ -1,554 +1,166 @@
-// ============================================================
-// NutEgg Popup Controller
-// ============================================================
-
-// --- Translations & Helpers ---
-const helper = typeof NutEggHelpers !== "undefined" ? NutEggHelpers : (typeof globalThis.NutEggHelpers !== "undefined" ? globalThis.NutEggHelpers : globalThis.helper || {});
-
-// --- Core Services & State Management ---
-const config = new (globalThis.NutEggServices?.ConfigService || (typeof ConfigService !== "undefined" ? ConfigService : class {}))();
-const settings = new (globalThis.NutEggState?.SettingsState || (typeof SettingsState !== "undefined" ? SettingsState : class {}))();
-const session = new (globalThis.NutEggState?.SessionState || (typeof SessionState !== "undefined" ? SessionState : class {}))();
-const tabStateManager = new (globalThis.NutEggState?.TabStateManager || (typeof TabStateManager !== "undefined" ? TabStateManager : class {}))();
-
-const pageExtractor = new (globalThis.NutEggServices?.PageExtractor || (typeof PageExtractor !== "undefined" ? PageExtractor : class {}))();
-const analysisService = new (globalThis.NutEggServices?.AnalysisService || (typeof AnalysisService !== "undefined" ? AnalysisService : class {}))();
-
-// --- UI Components ---
-const headerUI = new (globalThis.NutEggUI?.HeaderComponent || (typeof HeaderComponent !== "undefined" ? HeaderComponent : class {}))();
-const bannersUI = new (globalThis.NutEggUI?.BannersComponent || (typeof BannersComponent !== "undefined" ? BannersComponent : class {}))();
-const captureUI = new (globalThis.NutEggUI?.CaptureViewComponent || (typeof CaptureViewComponent !== "undefined" ? CaptureViewComponent : class {}))();
-const sectionsUI = new (globalThis.NutEggUI?.SectionChipsComponent || (typeof SectionChipsComponent !== "undefined" ? SectionChipsComponent : class {}))();
-const verdictUI = new (globalThis.NutEggUI?.VerdictComponent || (typeof VerdictComponent !== "undefined" ? VerdictComponent : class {}))();
-const actionsUI = new (globalThis.NutEggUI?.ActionControlsComponent || (typeof ActionControlsComponent !== "undefined" ? ActionControlsComponent : class {}))();
-const resultsUI = new (globalThis.NutEggUI?.ResultsViewComponent || (typeof ResultsViewComponent !== "undefined" ? ResultsViewComponent : class {}))();
-const metricsUI = new (globalThis.NutEggUI?.MetricsComponent || (typeof MetricsComponent !== "undefined" ? MetricsComponent : class {}))();
-const mindmapUI = new (globalThis.NutEggUI?.MindmapComponent || (typeof MindmapComponent !== "undefined" ? MindmapComponent : class {}))();
-const chaptersUI = new (globalThis.NutEggUI?.ChaptersComponent || (typeof ChaptersComponent !== "undefined" ? ChaptersComponent : class {}))();
-const qaUI = new (globalThis.NutEggUI?.QaComponent || (typeof QaComponent !== "undefined" ? QaComponent : class {}))();
-const eggsUI = new (globalThis.NutEggUI?.EggsComponent || (typeof EggsComponent !== "undefined" ? EggsComponent : class {}))();
-
-const uiComponents = {
-  headerUI,
-  bannersUI,
-  captureUI,
-  sectionsUI,
-  verdictUI,
-  actionsUI,
-  resultsUI,
-  metricsUI,
-  mindmapUI,
-  chaptersUI,
-  qaUI,
-  eggsUI,
-};
-
-const envService = new (globalThis.NutEggServices?.EnvironmentService || (typeof EnvironmentService !== "undefined" ? EnvironmentService : class {}))({
-  config,
-  settings,
-  session,
-  headerUI,
-  bannersUI,
-  metricsUI,
-  helper,
-  t,
-  onServerOffline: () => {
-    headerUI.render(session, settings);
-    analyzeAction?.updateAnalyzeButtonsState?.();
-  },
-  onServerOnline: (status) => {
-    headerUI.render(session, settings);
-    analyzeAction?.updateAnalyzeButtonsState?.();
-  },
-});
-
-// --- Action Handlers ---
-const TabActionClass = globalThis.NutEggActions?.TabAction || (typeof TabAction !== "undefined" ? TabAction : class {});
-const AnalyzeActionClass = globalThis.NutEggActions?.AnalyzeAction || (typeof AnalyzeAction !== "undefined" ? AnalyzeAction : class {});
-const SaveActionClass = globalThis.NutEggActions?.SaveAction || (typeof SaveAction !== "undefined" ? SaveAction : class {});
-const HistoryActionClass = globalThis.NutEggActions?.HistoryAction || (typeof HistoryAction !== "undefined" ? HistoryAction : class {});
-const InteractionActionClass = globalThis.NutEggActions?.InteractionAction || (typeof InteractionAction !== "undefined" ? InteractionAction : class {});
-
-const tabAction = new TabActionClass({
-  session,
-  settings,
-  tabStateManager,
-  pageExtractor,
-  envService,
-  ui: uiComponents,
-  getHistoryAction: () => historyAction,
-  getAnalyzeAction: () => analyzeAction,
-  showCaptureState: () => showCaptureState(),
-  showResultsState: (res, prov) => showResultsState(res, prov),
-  renderApp: () => renderApp(),
-});
-
-const analyzeAction = new AnalyzeActionClass({
-  session,
-  settings,
-  tabStateManager,
-  analysisService,
-  envService,
-  ui: uiComponents,
-  getTabAction: () => tabAction,
-  getSaveAction: () => saveAction,
-  showResultsState: (res, prov) => showResultsState(res, prov),
-  renderApp: () => renderApp(),
-});
-
-const saveAction = new SaveActionClass({
-  session,
-  settings,
-  tabStateManager,
-  analysisService,
-  envService,
-  ui: uiComponents,
-  getTabAction: () => tabAction,
-  getAnalyzeAction: () => analyzeAction,
-});
-
-const historyAction = new HistoryActionClass({
-  session,
-  settings,
-  tabStateManager,
-  analysisService,
-  ui: uiComponents,
-  showResultsState: (res, prov) => showResultsState(res, prov),
-  getSaveAction: () => saveAction,
-});
-
-const interactionAction = new InteractionActionClass({
-  session,
-  settings,
-  tabStateManager,
-  pageExtractor,
-  analysisService,
-  ui: uiComponents,
-  getTabAction: () => tabAction,
-});
-
-// ============================================================
-// UI Render Coordinator
-// ============================================================
-
-function renderApp(sessionState = session, settingsState = settings) {
-  headerUI.render(sessionState, settingsState);
-  bannersUI.render(sessionState, settingsState);
-  resultsUI.render(sessionState, settingsState);
-  captureUI.render(sessionState, settingsState);
-  verdictUI.render(sessionState, settingsState);
-  actionsUI.render(sessionState, settingsState);
-  eggsUI.render(sessionState, settingsState);
-}
-
-function showResultsState(result, provenance = null) {
-  const pinnedTabId = session.activeTabId;
-  session.analysisResult = result;
-  if (provenance) session.provenance = provenance;
-
-  // Populate allEggs from result if session has none
-  if (Array.isArray(result?.allEggs) && result.allEggs.length > 0) {
-    const currentEggs = session.allEggs || [];
-    const normalized = result.allEggs.map((name) => ({
-      fileName: typeof name === "string" ? name : name?.fileName,
-      description: "",
-      topic: "",
-    }));
-    for (const n of normalized) {
-      if (n.fileName && !currentEggs.some((e) => e.fileName === n.fileName)) {
-        currentEggs.push(n);
-      }
-    }
-    session.allEggs = currentEggs;
-  }
-
-  // Initialize selected eggs from matched eggs if empty
-  if (session.selectedEggs.size === 0 && Array.isArray(result?.matchedEggs) && result.matchedEggs.length > 0) {
-    result.matchedEggs.forEach((egg) => {
-      const name = typeof egg === "string" ? egg : egg?.fileName;
-      if (name) session.selectedEggs.add(name);
-    });
-  }
-
-  resultsUI.showResults();
-  globalThis.NutEggUI?.initCollapsibleSections?.();
-  if (!session.isReanalyzing) {
-    globalThis.NutEggUI?.resetCollapsibleSections?.();
-  }
-  if (!actionsUI.getProcessedMessage()) {
-    const entry = (session.currentNutId != null && session.captureHistory.find((h) => String(h.nutId) === String(session.currentNutId))) || session.captureHistory[0];
-    if (entry) {
-      const when = new Date(entry.capturedAt).toLocaleString();
-      const stateLabel = entry.saved === "saved"
-        ? t("stateSaved") : entry.saved === "skip" ? t("stateCollected") : t("stateAnalyzed");
-      actionsUI.showProcessedNote(t("capturedWhenStored", { when, state: stateLabel }));
-    } else {
-      actionsUI.showProcessedNote(t("analysisCompleteAdjust"));
-    }
-  } else {
-    actionsUI.showProcessedNote(actionsUI.getProcessedMessage());
-  }
-  sectionsUI.updateUI(settings.enabledSections);
-  if (!session.isReanalyzing) {
-    analyzeAction.updateAnalyzeButtonsState();
-    actionsUI.setHistorySelectDisabled(false);
-  }
-  actionsUI.renderHistory(session.captureHistory, session.currentNutId);
-  if (provenance) {
-    resultsUI.renderProvenance(provenance);
-  }
-
-  renderApp();
-
-  const eggResults = session.isStage1() ? [] : (result.eggResults || []);
-  const allRejected = !session.isStage1() && (
-    (eggResults.length > 0 && eggResults.every((r) => r.rejected)) ||
-    (eggResults.length === 0 && Array.isArray(result.matchedEggs) && result.matchedEggs.length > 0)
-  );
-
-  if (!settings.isChromeMode()) {
-    tabAction.fetchEggs().then(() => {
-      if (pinnedTabId && session.activeTabId !== pinnedTabId) return;
-      eggsUI.renderSection(allRejected ? [] : (result.matchedEggs || []), {
-        allEggs: session.allEggs,
-        selectedEggs: session.selectedEggs,
-        allRejected,
-        onSelectChange: () => analyzeAction.updateStage1ProceedBtn(),
-      });
-      const matchedCount = allRejected ? 0 : (result?.matchedEggs || []).length;
-      if (session.isStage1() && (settings.analysisMode === "confirm" || matchedCount === 0)) {
-        eggsUI.expandEggsList(true);
-        analyzeAction.updateStage1ProceedBtn();
-        actionsUI.stage1ConfirmBox?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }
-    });
-  }
-
-  verdictUI.renderTitleVerdict(result.titleVerdict, settings.enabledSections?.titleVerdict !== false);
-  mindmapUI.render(result.mindMap, settings.enabledSections.mindMap !== false);
-
-  const hasAuthorChapters =
-    (Array.isArray(session.extractedContent?.chapters) && session.extractedContent.chapters.length > 0) ||
-    (Array.isArray(session.stage1Payload?.chapters) && session.stage1Payload.chapters.length > 0) ||
-    (Array.isArray(session.stage1Payload?.content?.chapters) && session.stage1Payload.content.chapters.length > 0) ||
-    (Array.isArray(result?.chapters) && result.chapters.length > 0);
-
-  const isShortWithoutChapters =
-    (result.isLongForm === false || !result.chapterMap || result.chapterMap.length <= 1) &&
-    !hasAuthorChapters;
-
-  chaptersUI.render({
-    chapterMap: result.chapterMap,
-    enabled: settings.enabledSections.chapterMap !== false,
-    isShortWithoutChapters,
-    activeTabId: session.activeTabId,
-    onSeek: (seconds) => interactionAction.seekToChapter(seconds),
-  });
-
-  qaUI.setScope(session.followupScope || "within");
-  qaUI.render(result, session.followUpQa);
-
-  eggsUI.renderKnowledge(eggResults, {
-    activeEggTab: session.activeEggTab,
-    allRejected,
-    noEggMatched: allRejected,
-    onTabChange: (newTab) => { session.activeEggTab = newTab; },
-  });
-
-  bannersUI.hideAll();
-}
-
-function showCaptureState() {
-  session.analysisResult = null;
-  session.cachedProcessedSaved = null;
-  session.followUpQa = [];
-  qaUI.clearFollowup();
-  session.nutCollected = false;
-  session.eggHatched = false;
-  session.currentNutId = null;
-  session.activeEggTab = null;
-  globalThis.NutEggUI?.resetCollapsibleSections?.();
-  bannersUI.hideAll();
-  sectionsUI.updateUI(settings.enabledSections);
-  captureUI.setQuestionsScope(session.customQuestionsScope || "within");
-  renderApp();
-}
-
-// ============================================================
-// Initialization & Event Wiring
-// ============================================================
+// Popup composition and event wiring. Tab state belongs exclusively to the store.
+const settings = new globalThis.NutEggState.SettingsState();
+const tabStateManager = new globalThis.NutEggState.TabStateManager();
+tabStateManager.settings = settings;
+const pageExtractor = new globalThis.NutEggServices.PageExtractor();
+const analysisService = new globalThis.NutEggServices.AnalysisService();
+const operations = new globalThis.NutEggServices.PopupOperations({ store: tabStateManager, service: analysisService, extractor: pageExtractor });
+const envService = new globalThis.NutEggServices.EnvironmentService({ settings, store: tabStateManager });
+const ui = Object.fromEntries([
+  ['headerUI', 'HeaderComponent'], ['bannersUI', 'BannersComponent'], ['captureUI', 'CaptureViewComponent'],
+  ['sectionsUI', 'SectionChipsComponent'], ['verdictUI', 'VerdictComponent'], ['actionsUI', 'ActionControlsComponent'],
+  ['resultsUI', 'ResultsViewComponent'], ['metricsUI', 'MetricsComponent'], ['mindmapUI', 'MindmapComponent'],
+  ['discussionUI', 'DiscussionComponent'], ['qaUI', 'QaComponent'], ['eggsUI', 'EggsComponent'],
+].map(([name, type]) => [name, new globalThis.NutEggUI[type]() ]));
+const renderer = new globalThis.NutEggUI.PopupRenderer({ store: tabStateManager, settings, ui });
+const activityUI = new globalThis.NutEggUI.AnalysisActivityComponent();
+const deps = { tabStateManager, settings, operations, envService, pageExtractor, ui };
+const tabAction = new globalThis.NutEggActions.TabAction(deps);
+const analyzeAction = new globalThis.NutEggActions.AnalyzeAction(deps);
+const saveAction = new globalThis.NutEggActions.SaveAction(deps);
+const historyAction = new globalThis.NutEggActions.HistoryAction(deps);
+const interactionAction = new globalThis.NutEggActions.InteractionAction(deps);
+const activeDraft = values => tabStateManager.dispatch({ type: 'draft', tabId: tabStateManager.activeTabId, values });
+const presentation = values => activeDraft({ presentation: { ...tabStateManager.getTab(tabStateManager.activeTabId)?.presentation, ...values } });
+const click = (element, fn) => element?.addEventListener('click', fn);
 
 async function initPopup() {
-  eggsUI.bindElements();
-  eggsUI.resetCreateForm();
-  const version = chrome.runtime?.getManifest?.()?.version;
-  if (version) headerUI.updateVersion(version);
+  if (typeof requestAnimationFrame === 'function') await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  globalThis.NutEggI18n?.initI18n(); globalThis.NutEggI18n?.applyI18n();
+  const stored = await settings.loadFromStorage();
+  tabStateManager.dispatch({ type: 'defaults', defaults: analyzeAction.settingsDefaults() });
+  if (stored?.cachedMetrics) tabStateManager.dispatch({ type: 'metrics', value: stored.cachedMetrics });
+  tabStateManager.dispatch({ type: 'visibility', visible: document.visibilityState === 'visible' });
+  tabStateManager.subscribe(event => renderer.handle(event));
+  tabStateManager.subscribe(event => { if (event.type === 'receipt' && event.receipt.success) void envService.fetchMetrics(); });
+  tabStateManager.diagnosticsEnabled = stored?.popupDiagnostics === true;
+  // Useful for local debugging; contains IDs and transition metadata only.
+  globalThis.NutEggPopupDiagnostics = () => tabStateManager.diagnostics.map(row => ({ ...row }));
 
-  envService?.setUI?.({ headerUI, bannersUI, metricsUI });
-
-  const i18n = typeof window !== "undefined" ? window.NutEggI18n : null;
-  i18n?.initI18n();
-  i18n?.applyI18n();
-
-  try {
-    const stored = await settings.loadFromStorage();
-    if (stored?.analysisMode === "confirm" || stored?.analysisMode === "fast") {
-      analyzeAction.setAnalysisMode(stored.analysisMode);
+  const toggleSection = key => {
+    const view = tabStateManager.viewModel();
+    if (key === 'generateKnowledgeEntries') { analyzeAction.setGenerateKnowledgeEntries(!view.generateKnowledgeEntries); return true; }
+    const next = settings.getToggledSections(key, view.enabledSections);
+    if (!next) { tabStateManager.dispatch({ type: 'notice', tabId: view.activeTabId, message: t('atLeastOneSection') }); return false; }
+    if (key === 'discussion') {
+      activeDraft({ enabledSections: next, discussionOverride: next.discussion });
+      if (next.discussion) void operations.discussion(view.activeTabId); else operations.stopDiscussion(view.activeTabId);
+      return true;
     }
-    if (stored?.cachedMetrics) {
-      metricsUI.render(stored.cachedMetrics);
-    }
-  } catch {}
-
-  sectionsUI.init({
-    chipSummary: document.getElementById("chip-summary"),
-    chipMindmap: document.getElementById("chip-mindmap"),
-    chipChapters: document.getElementById("chip-chapters"),
-    chipReSummary: document.getElementById("reanalyze-chip-summary"),
-    chipReMindmap: document.getElementById("reanalyze-chip-mindmap"),
-    chipReChapters: document.getElementById("reanalyze-chip-chapters"),
-    reanalyzeAccordion: document.getElementById("reanalyze-sections-accordion"),
-    reanalyzeToggleBtn: document.getElementById("reanalyze-sections-toggle"),
-    reanalyzeSectionsBody: document.getElementById("reanalyze-sections-body"),
-    onToggle: async (key) => {
-      const ok = await settings.toggleSection(key);
-      if (!ok) {
-        bannersUI.showWarning(t("atLeastOneSection"));
-        return;
-      }
-      sectionsUI.updateUI(settings.enabledSections);
-      if (session.analysisResult) {
-        showResultsState(session.analysisResult, helper.provenanceFromExtraction(session.extractedContent));
-      }
-    },
-    onSectionToggle: async (section) => {
-      const ok = await settings.toggleSection(section);
-      if (!ok) {
-        bannersUI.showWarning(t("atLeastOneSection"));
-        return;
-      }
-      sectionsUI.updateUI(settings.enabledSections);
-      if (session.analysisResult) {
-        showResultsState(session.analysisResult, helper.provenanceFromExtraction(session.extractedContent));
-      }
-    },
-  });
-  sectionsUI.updateUI(settings.enabledSections);
-
-  envService.fetchMetrics();
-
-  chrome.storage?.onChanged?.addListener((changes, areaName) => {
-    if (areaName === "local") {
-      if (changes.analysisMode) {
-        const newMode = changes.analysisMode.newValue;
-        if (newMode === "confirm" || newMode === "fast") {
-          analyzeAction.setAnalysisMode(newMode);
-        }
-      }
-      if (changes.outputLanguage && changes.outputLanguage.newValue) {
-        settings.setOutputLanguage(changes.outputLanguage.newValue, false);
-      }
-      if (changes.enabledSections && changes.enabledSections.newValue) {
-        settings.setEnabledSections(changes.enabledSections.newValue);
-        sectionsUI.updateUI(settings.enabledSections);
-        if (session.analysisResult) {
-          showResultsState(session.analysisResult, helper.provenanceFromExtraction(session.extractedContent));
-        }
-      }
-      if (
-        changes.serverPort ||
-        changes.chromeAiEnabled ||
-        changes.chromeAiApiKey ||
-        changes.chromeAiProvider ||
-        changes.chromeAiModel
-      ) {
-        envService.checkServerStatus(() => {
-          analyzeAction.updateAnalyzeButtonsState();
-        });
-      }
-    }
-  });
-
-  actionsUI.modeFastBtn?.addEventListener("click", () => analyzeAction.setAnalysisMode("fast"));
-  actionsUI.modeConfirmBtn?.addEventListener("click", () => analyzeAction.setAnalysisMode("confirm"));
-  actionsUI.stage1ProceedBtn?.addEventListener("click", () => analyzeAction.handleProceedStage2(null, true, false, session.activeTabId));
-  actionsUI.stage1SkipBtn?.addEventListener("click", () => saveAction.handleSaveRaw());
-
-  actionsUI.analyzeBtn?.addEventListener("click", () => {
-    const notReady = analyzeAction.getAnalyzeNotReadyReason();
-    if (notReady) {
-      bannersUI.showWarning(notReady);
-      envService.updateServerStatusIndicator();
-      return;
-    }
-    analyzeAction.handleAnalyze(true);
-  });
-  actionsUI.confirmBtn?.addEventListener("click", () => saveAction.handleConfirm());
-  actionsUI.collectNutBtn?.addEventListener("click", () => saveAction.handleSaveRaw());
-  actionsUI.discardBtn?.addEventListener("click", () => window.close());
-  globalThis.NutEggUI?.initCollapsibleSections?.();
-  actionsUI.backBtn?.addEventListener("click", async () => {
-    showCaptureState();
-    let currentTabUrl = "";
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.url) currentTabUrl = tab.url;
-    } catch {}
-    const pageUrl = currentTabUrl || session.extractedContent?.url;
-    const pageTitle = (pageUrl === currentTabUrl ? null : session.extractedContent?.title) || t("capturedPage");
-    captureUI.setPageInfo({ title: pageTitle, url: pageUrl });
-  });
-
-  actionsUI.reanalyzeBtn?.addEventListener("click", async () => {
-    const hasContent = !!(session.extractedContent && session.extractedContent.content);
-    if (!hasContent) {
-      actionsUI.setReanalyzeRefreshLoading(true);
-      actionsUI.setReanalyzingState(t("loadingContent"));
-      try {
-        await tabAction.refreshForCurrentTab(true);
-        bannersUI.hideWarning();
-        bannersUI.hideMessages();
-      } finally {
-        actionsUI.setReanalyzeRefreshLoading(false);
-      }
-      if (!session.extractedContent || !session.extractedContent.content) {
-        bannersUI.showWarning(analyzeAction.getAnalyzeNotReadyReason() || t("couldNotRetrieveContent"));
-        actionsUI.setAnalyzeButtonLoading(false, t("reanalyze"));
-        return;
-      }
-    }
-    const notReady = analyzeAction.getAnalyzeNotReadyReason();
-    if (notReady) {
-      bannersUI.showWarning(notReady);
-      envService.updateServerStatusIndicator();
-      return;
-    }
-    analyzeAction.handleAnalyze(true, null, true);
-  });
-
-  actionsUI.reanalyzeRefreshBtn?.addEventListener("click", async () => {
-    actionsUI.setReanalyzeRefreshLoading(true);
-    try {
-      await tabAction.refreshForCurrentTab(true);
-      bannersUI.hideWarning();
-      bannersUI.hideMessages();
-    } catch (err) {
-      bannersUI.showError(err instanceof Error ? err.message : t("couldNotRetrieveContent"));
-    } finally {
-      actionsUI.setReanalyzeRefreshLoading(false);
-    }
-  });
-
-  actionsUI.historySelect?.addEventListener("change", () => {
-    historyAction.onHistorySelected(actionsUI.historySelect.value);
-  });
-
-  captureUI.refreshBtn?.addEventListener("click", () => {
-    tabAction.refreshForCurrentTab(true);
-  });
-
-  qaUI.followupBtn?.addEventListener("click", () => interactionAction.handleFollowUp());
-  qaUI.followupInput?.addEventListener("keydown", (e) => {
-    // Avoid plain Enter to prevent accidental submissions (e.g. IME confirmation or typing mistakes).
-    // Require Cmd+Enter, Ctrl+Enter, or Shift+Enter.
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey || e.shiftKey)) {
-      e.preventDefault();
-      interactionAction.handleFollowUp();
-    }
-  });
-  qaUI.onScopeChange = (scope) => {
-    session.followupScope = scope;
+    // Auto-enable is per-page and must not become a default on other pages.
+    settings.setEnabledSections({ ...next, discussion: settings.enabledSections.discussion }, true);
+    tabStateManager.dispatch({ type: 'defaults', defaults: analyzeAction.settingsDefaults() });
+    activeDraft({ enabledSections: next }); return true;
   };
-  captureUI.onScopeChange = (scope) => {
-    session.customQuestionsScope = scope;
-  };
-
-  headerUI.serverStatus?.addEventListener("click", () => {
-    if (chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+  ui.sectionsUI.init({ chipVerdictSummary: document.getElementById('chip-verdict-summary'), chipMindmap: document.getElementById('chip-mindmap'),
+    reanalyzeChipVerdictSummary: document.getElementById('reanalyze-chip-verdict-summary'), chipReMindmap: document.getElementById('reanalyze-chip-mindmap'),
+    reanalyzeAccordion: document.getElementById('reanalyze-sections-accordion'), reanalyzeToggleBtn: document.getElementById('reanalyze-sections-toggle'),
+    reanalyzeSectionsBody: document.getElementById('reanalyze-sections-body'), onToggle: toggleSection,
+    onExpand: key => presentation({ [key]: !tabStateManager.getTab(tabStateManager.activeTabId)?.presentation[key] }) });
+  const { actionsUI: a, captureUI: c, qaUI: q, eggsUI: e, headerUI: h } = ui;
+  ui.discussionUI.init({ onToggle: (topicId, stance) => interactionAction.toggleDiscussionComments(topicId, stance) });
+  for (const prefix of ['discussion-capture', 'discussion-reanalyze']) {
+    click(document.getElementById(prefix + '-load'), () => operations.discussion(tabStateManager.activeTabId, true));
+    click(document.getElementById(prefix + '-refresh'), () => operations.discussion(tabStateManager.activeTabId));
+  }
+  click(a.modeFastBtn, () => analyzeAction.setAnalysisMode('full'));
+  click(a.modeConfirmBtn, () => analyzeAction.setAnalysisMode('preview'));
+  click(a.analyzeBtn, () => analyzeAction.handleAnalyze());
+  click(a.reanalyzeBtn, () => analyzeAction.handleAnalyze(true, null, true));
+  click(a.reanalyzeRefreshBtn, () => tabAction.refreshForCurrentTab(true));
+  click(c.refreshBtn, () => tabAction.refreshCaptureForCurrentTab());
+  click(a.stage1ProceedBtn, event => a.handleEggAnalysisClick(event, mode => analyzeAction.handleEggAnalysis(mode)));
+  click(a.eggAnalysisOnlyBtn, () => {
+    analyzeAction.setGenerateKnowledgeEntries(false);
+    a.updateEggAnalysisLabel(false);
+    a.toggleEggAnalysisMenu(false);
   });
-  headerUI.statusIndicatorWrap?.addEventListener("click", () => {
-    if (chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+  click(a.eggAnalysisWithKnowledgeBtn, () => {
+    analyzeAction.setGenerateKnowledgeEntries(true);
+    a.updateEggAnalysisLabel(true);
+    a.toggleEggAnalysisMenu(false);
   });
-  headerUI.settingsBtn?.addEventListener("click", () => {
-    if (chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+  for (const button of [a.collectNutBtn, a.stage1SkipBtn]) click(button, () => saveAction.handleSaveRaw());
+  click(a.confirmBtn, () => saveAction.handleConfirm());
+  click(a.backBtn, () => analyzeAction.handleBackToContent());
+  click(a.viewAnalysisBtn, () => analyzeAction.handleViewAnalysis());
+  click(a.discardBtn, () => window.close());
+  a.historySelect?.addEventListener('change', () => historyAction.onHistorySelected(a.historySelect.value));
+  c.customQuestionsEl?.addEventListener('input', () => activeDraft({ customQuestions: c.customQuestionsEl.value }));
+  q.followupInput?.addEventListener('input', () => activeDraft({ followupDraft: q.followupInput.value }));
+  q.onScopeChange = scope => activeDraft({ followupScope: scope });
+  c.onScopeChange = scope => activeDraft({ customQuestionsScope: scope });
+  click(q.followupBtn, () => interactionAction.handleFollowUp());
+  q.followupInput?.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey || event.shiftKey)) { event.preventDefault(); interactionAction.handleFollowUp(); }
   });
-  headerUI.aiCreditPill?.addEventListener("click", () => {
-    if (chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+  click(c.questionsToggle, () => presentation({ questionsExpanded: !tabStateManager.getTab(tabStateManager.activeTabId)?.presentation.questionsExpanded }));
+  click(e.captureEggsToggle, () => presentation({ captureEggsExpanded: !tabStateManager.getTab(tabStateManager.activeTabId)?.presentation.captureEggsExpanded }));
+  click(e.eggsToggle, () => presentation({ eggsExpanded: !tabStateManager.getTab(tabStateManager.activeTabId)?.presentation.eggsExpanded }));
+  click(e.eggsCreateToggle, () => presentation({ createFormOpen: !tabStateManager.getTab(tabStateManager.activeTabId)?.presentation.createFormOpen }));
+  click(e.eggsCreateCancelBtn, () => presentation({ createFormOpen: false }));
+  for (const input of [e.eggsNewName, e.newEggName]) input?.addEventListener('input', () => activeDraft({ newEggName: input.value }));
+  for (const input of [e.eggsNewDesc, e.newEggDescription]) input?.addEventListener('input', () => activeDraft({ newEggDescription: input.value }));
+  click(e.createEggBtn, () => saveAction.handleCreateEgg(false));
+  click(e.eggsCreateBtn, () => saveAction.handleCreateEgg(true));
+  for (const button of [h.serverStatus, h.statusIndicatorWrap, h.settingsBtn, h.aiCreditPill, document.getElementById('setup-open-settings-btn')]) click(button, () => {
+    if (button?.id === 'setup-open-settings-btn' && chrome?.storage?.local?.set) chrome.storage.local.set({ chromeAiEnabled: true });
+    chrome.runtime.openOptionsPage();
   });
-
-  captureUI.questionsToggle?.addEventListener("click", () => {
-    captureUI.toggleQuestionsArea();
-  });
-
-  eggsUI.eggsToggle?.addEventListener("click", () => {
-    eggsUI.toggleEggsList();
-  });
-  eggsUI.eggsCreateToggle?.addEventListener("click", () => {
-    eggsUI.toggleCreateForm();
-  });
-  eggsUI.eggsCreateCancelBtn?.addEventListener("click", () => {
-    eggsUI.toggleCreateForm(false);
-  });
-  eggsUI.createEggBtn?.addEventListener("click", () => saveAction.handleCreateEgg(false));
-  eggsUI.eggsCreateBtn?.addEventListener("click", () => saveAction.handleCreateEgg(true));
-  eggsUI.reanalyzeEggsBtn?.addEventListener("click", () => {
-    analyzeAction.handleReanalyzeEggs();
-  });
-  eggsUI.reanalyzeEggsRefreshBtn?.addEventListener("click", async () => {
-    eggsUI.setReanalyzeEggsRefreshLoading(true);
-    try {
-      await tabAction.refreshForCurrentTab(true);
-      bannersUI.hideWarning();
-      bannersUI.hideMessages();
-    } catch (err) {
-      bannersUI.showError(err instanceof Error ? err.message : t("couldNotRetrieveContent"));
-    } finally {
-      eggsUI.setReanalyzeEggsRefreshLoading(false);
+  click(document.getElementById('report-bug-link'), event => { event.preventDefault(); interactionAction.openGitHubBugReport(); });
+  click(ui.bannersUI.errorReportBug, event => { event.preventDefault(); interactionAction.openGitHubBugReport(tabStateManager.viewModel().error || ''); });
+  document.addEventListener('click', event => {
+    if (!event.target.closest?.('.egg-analysis-selector')) a.toggleEggAnalysisMenu(false);
+    if (event.target.closest?.('.source-pill')) interactionAction.handleSourcePillClick(event);
+    const header = event.target.closest?.('#results-state .section-header');
+    if (header && !event.target.closest?.('button, a, input, select, textarea')) {
+      const id = header.closest('.result-section').id;
+      const state = tabStateManager.getTab(tabStateManager.activeTabId)?.presentation.collapsible || {};
+      presentation({ collapsible: { ...state, [id]: !state[id] } });
     }
   });
-
-  const reportBugLink = document.getElementById("report-bug-link");
-  reportBugLink?.addEventListener("click", (e) => {
-    e.preventDefault();
-    interactionAction.openGitHubBugReport();
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') a.toggleEggAnalysisMenu(false);
+    const section = event.target.closest?.('#results-state .section-header');
+    if (section && ['Enter', ' '].includes(event.key)) { event.preventDefault(); section.click(); }
   });
-
-  bannersUI.errorBanner?.addEventListener("click", (e) => {
-    const target = e.target;
-    if (target?.id === "error-report-bug-link" || target?.closest?.("#error-report-bug-link")) {
-      e.preventDefault();
-      interactionAction.openGitHubBugReport(bannersUI.errorBanner.textContent || "");
-    }
+  window.addEventListener('scroll', () => {
+    const record = tabStateManager.getTab(tabStateManager.activeTabId);
+    if (record && record.presentation.scroll !== window.scrollY) presentation({ scroll: window.scrollY });
+  }, { passive: true });
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes.analysisMode) settings.setAnalysisMode(changes.analysisMode.newValue, false);
+    if (changes.outputLanguage) settings.setOutputLanguage(changes.outputLanguage.newValue, false);
+    if (changes.enabledSections) settings.setEnabledSections(changes.enabledSections.newValue);
+    if (changes.generateKnowledgeEntries) settings.setGenerateKnowledgeEntries(changes.generateKnowledgeEntries.newValue, false);
+    if (changes.debugInfo) { settings.debugInfo = changes.debugInfo.newValue === true; void operations.refreshDebugInfo(); }
+    if (changes.captureRetryCount || changes.captureRetryDelayMs) settings.setCaptureRetries({
+      captureRetryCount: changes.captureRetryCount ? changes.captureRetryCount.newValue ?? 3 : settings.captureRetryCount,
+      captureRetryDelayMs: changes.captureRetryDelayMs ? changes.captureRetryDelayMs.newValue ?? 3000 : settings.captureRetryDelayMs,
+    });
+    tabStateManager.dispatch({ type: 'defaults', defaults: analyzeAction.settingsDefaults() });
+    if (changes.popupDiagnostics) tabStateManager.diagnosticsEnabled = changes.popupDiagnostics.newValue === true;
+    if (Object.keys(changes).some(key => key === 'serverPort' || key.startsWith('chromeAi'))) void envService.checkServerStatus(true);
+    tabStateManager.emit({ type: 'settings' });
   });
-
-  document.addEventListener("click", (e) => {
-    if (e.target?.classList?.contains("source-pill") || e.target?.closest?.(".source-pill")) {
-      interactionAction.handleSourcePillClick(e);
-    }
+  await activityUI.init({ manager: tabStateManager, onSelect: id => tabAction.openAnalysisActivity(id) });
+  tabStateManager.subscribe(event => {
+    if (['activated', 'invalidated'].includes(event.type)) void operations.refreshDebugInfo();
   });
-
-  // Tab Events
-  chrome.tabs?.onActivated?.addListener((info) => tabAction.handleTabActivated(info));
-  document.addEventListener("visibilitychange", () => tabAction.handleVisibilityChange());
-  chrome.tabs?.onUpdated?.addListener((tabId, changeInfo) => tabAction.handleTabUpdated(tabId, changeInfo));
-  chrome.tabs?.onRemoved?.addListener((tabId) => tabAction.handleTabRemoved(tabId));
-
+  void operations.refreshDebugInfo();
+  setInterval(() => { void operations.refreshDebugInfo(); }, 1000);
+  chrome.tabs.onActivated.addListener(info => {
+    if (activityUI.windowId == null || activityUI.windowId === info.windowId) void tabAction.handleTabActivated(info);
+  });
+  chrome.tabs.onUpdated.addListener((id, changes) => tabAction.handleTabUpdated(id, changes));
+  chrome.tabs.onRemoved.addListener(id => tabAction.handleTabRemoved(id));
+  chrome.tabs.onAttached?.addListener(() => activityUI.refresh());
+  chrome.tabs.onDetached?.addListener(() => activityUI.refresh());
+  document.addEventListener('visibilitychange', () => tabAction.handleVisibilityChange());
+  globalThis.NutEggStartup?.finish();
   await tabAction.refreshForCurrentTab();
 }
-
-if (typeof module === "undefined" || !module.exports) {
-  if (typeof document !== "undefined" && document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initPopup);
-  } else {
-    initPopup();
-  }
-}
-
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = {
-    initPopup,
-    renderApp,
-    showResultsState,
-    showCaptureState,
-  };
-}
+if (typeof module !== 'undefined' && module.exports) module.exports = { initPopup, tabStateManager, renderer };
+else if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPopup);
+else void initPopup();

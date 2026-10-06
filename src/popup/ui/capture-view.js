@@ -11,6 +11,7 @@ class CaptureViewComponent {
     this.pageAuthorEl = root.getElementById("page-author");
     this.pagePublishedEl = root.getElementById("page-published");
     this.pageWordCountEl = root.getElementById("page-word-count");
+    this.pageCaptionSourceEl = root.getElementById("page-caption-source");
     this.contentPreview = root.getElementById("content-preview");
     this.refreshBtn = root.getElementById("refresh-btn");
     this.questionsToggle = root.getElementById("questions-toggle");
@@ -76,10 +77,10 @@ class CaptureViewComponent {
     if (this.pageType) this.pageType.textContent = content?.sourceType || options.defaultType || "";
 
     if (isSessionLoading) {
-      if (this.contentPreview) this.contentPreview.textContent = t("retrievingPageContent");
+      this.setPreviewText(t("retrievingPageContent"));
       this.clearAuthorAndPublished();
     } else {
-      if (this.contentPreview) this.contentPreview.textContent = content?.content || options.previewPlaceholder || t("noContentExtracted");
+      this.setPreviewContent(content, options.previewPlaceholder);
       this.showProvenance(content?.metadata || {}, content?.content);
     }
 
@@ -89,6 +90,19 @@ class CaptureViewComponent {
   }
 
   showProvenance(metadata = {}, rawContent = "") {
+    if (this.pageCaptionSourceEl) {
+      const sourceKeys = {
+        page_tracks: "captionSourcePageTracks",
+        watch_page: "captionSourceWatchPage",
+        innertube: "captionSourcePlayerApi",
+        player_tracks: "captionSourceLivePlayer",
+        transcript_panel: "captionSourceTranscriptPanel",
+      };
+      const key = Object.hasOwn(sourceKeys, metadata.caption_source) ? sourceKeys[metadata.caption_source] : null;
+      this.pageCaptionSourceEl.textContent = key ? t("captionSourceTag", { source: t(key) }) : "";
+      if (key) this.pageCaptionSourceEl.classList.remove("hidden");
+      else this.pageCaptionSourceEl.classList.add("hidden");
+    }
     const author = metadata.author || metadata.channel || metadata.handle || "";
     if (this.pageAuthorEl) {
       this.pageAuthorEl.textContent = author ? `✍️ ${author}` : "";
@@ -121,13 +135,59 @@ class CaptureViewComponent {
     }
   }
 
-  setPreviewText(text) {
-    if (this.contentPreview) {
-      this.contentPreview.textContent = text;
+  setPreviewContent(content, placeholder) {
+    if (content?.url !== this.previewUrl) {
+      this.previewUrl = content?.url;
+      if (this.contentPreview) this.contentPreview.scrollTop = 0;
     }
+    const items = content?.discussion?.items || [];
+    const comments = items.length ? '\n\n' + t('discussionPreview', { count: items.length }) + '\n'
+      + items.map((item, index) => `${index + 1}. ${item.parentId ? '↳ ' : ''}👤 ${this.commentAuthor(item)}\n${item.text}`
+        + (item.reaction?.count != null ? '\n' + t(item.reaction.kind === 'score' ? 'discussionScore' : 'discussionLikes', { count: item.reaction.count }) : '')).join('\n\n')
+      + (content.discussion.truncated ? '\n\n' + t('discussionTruncated') : '') : '';
+    const warning = globalThis.NutEggHelpers?.getExtractionWarning?.(content);
+    this.setPreviewText((content?.content || placeholder || t('noContentExtracted')) + comments, warning);
+  }
+
+  commentAuthor(item) {
+    if (typeof item.author === 'string' && item.author.trim()) return item.author.trim();
+    // Older captures or avatar-only layouts may still expose a named profile URL.
+    try {
+      const profile = new URL(item.authorId);
+      if (/^https?:$/.test(profile.protocol)) {
+        const match = profile.pathname.match(/^\/(@[^/]+)(?:\/|$)|^\/(?:user|u|people)\/([^/]+)(?:\/|$)/);
+        if (match) return decodeURIComponent(match[1] || match[2]);
+      }
+    } catch { /* No usable profile name. */ }
+    return t('discussionUnknownAuthor');
+  }
+
+  setPreviewText(text, warning = null) {
+    if (!this.contentPreview) return;
+    this.contentPreview.classList.toggle('incomplete', !!warning);
+    if (warning) text = `⚠️ ${warning}\n\n${text}`;
+    // Bring a newly detected fetch problem into view after refreshing a scrolled preview.
+    const scrollTop = warning && warning !== this.previewWarning ? 0 : this.contentPreview.scrollTop || 0;
+    this.previewWarning = warning;
+    const helpers = globalThis.NutEggHelpers;
+    if (helpers?.escapeHtml && helpers?.linkifyTimestamps) {
+      const escaped = helpers.escapeHtml(String(text ?? ""));
+      const html = helpers.linkifyTimestamps(escaped);
+      if (html !== escaped) {
+        this.contentPreview.innerHTML = html;
+        this.contentPreview.scrollTop = scrollTop;
+        return;
+      }
+    }
+    this.contentPreview.textContent = text;
+    this.contentPreview.scrollTop = scrollTop;
   }
 
   clearProvenance() {
+    if (this.pageCaptionSourceEl) {
+      this.pageCaptionSourceEl.textContent = "";
+      this.pageCaptionSourceEl.classList.add("hidden");
+    }
     if (this.pageAuthorEl) this.pageAuthorEl.textContent = "";
     if (this.pagePublishedEl) this.pagePublishedEl.textContent = "";
     if (this.pageWordCountEl) {
@@ -141,12 +201,12 @@ class CaptureViewComponent {
   }
 
   setLoading(text) {
-    if (this.contentPreview) this.contentPreview.textContent = text || t("retrievingPageContent");
+    this.setPreviewText(text || t("retrievingPageContent"));
     this.clearAuthorAndPublished();
   }
 
   setError(message) {
-    if (this.contentPreview) this.contentPreview.textContent = message;
+    this.setPreviewText(message);
     this.clearAuthorAndPublished();
   }
 
@@ -154,7 +214,7 @@ class CaptureViewComponent {
     if (this.pageTitle) this.pageTitle.textContent = t("untitled");
     if (this.pageUrl) this.pageUrl.textContent = "";
     if (this.pageType) this.pageType.textContent = "";
-    if (this.contentPreview) this.contentPreview.textContent = t("noContentExtracted");
+    this.setPreviewText(t("noContentExtracted"));
     this.clearAuthorAndPublished();
   }
 
@@ -211,4 +271,3 @@ _captureScope.NutEggUI.CaptureViewComponent = CaptureViewComponent;
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { CaptureViewComponent };
 }
-
