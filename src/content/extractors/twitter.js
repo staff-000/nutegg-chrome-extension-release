@@ -5,7 +5,7 @@
 // Detects twitter.com and x.com pages and extracts:
 // 1. Long-form X Articles (via [data-testid="twitterArticleReadView"],
 //    rich text views, headers, blockquotes, code blocks, lists)
-// 2. Tweets with embedded article cards (automatically opens or extracts card)
+// 2. Tweets with embedded article cards (preserves current post and link)
 // 3. Long-form posts with "Show more" button (automatically expands)
 // 4. Standard tweets, threads, and quote tweets
 //
@@ -13,157 +13,187 @@
 
 function detectTwitter() {
   const url = window.location.href;
-  return url.includes("twitter.com") || url.includes("x.com");
+  return (
+    ['twitter.com', 'x.com'].some(domain => NutEggPageIdentity.hostMatches(url, domain)) &&
+    /^\/(?:[A-Za-z0-9_]+\/(?:status|article)\/\d+|(?:i\/)?article\/\d+)(?:\/|$)/.test(new URL(url).pathname)
+  );
 }
 
-async function extractTwitter() {
+async function extractTwitter(context) {
+  context?.check();
   const url = window.location.href;
 
   // 1. Wait briefly for X SPA to hydrate DOM if just loaded
-  const hasTwitterContent = () => document.querySelector(
-    '[data-testid="twitterArticleReadView"], [data-testid="twitterArticleRichTextView"], article[data-testid="tweet"], [data-testid="tweetText"], [data-testid="card.layoutLarge.detail"], a[href*="/article/"], [data-testid="primaryColumn"]'
-  );
-  if (!hasTwitterContent() && typeof waitFor === "function") {
-    await waitFor(hasTwitterContent, 2500);
+  const hasTwitterContent = () =>
+    document.querySelector(
+      '[data-testid="twitterArticleReadView"], [data-testid="twitterArticleRichTextView"], article[data-testid="tweet"], [data-testid="tweetText"], [data-testid="card.layoutLarge.detail"], a[href*="/article/"], [data-testid="primaryColumn"]'
+    );
+  if (!hasTwitterContent() && typeof waitFor === 'function') {
+    await waitFor(hasTwitterContent, 2500, context);
+    context?.check();
   }
 
   // 2. Check for X Article Reader View first (standalone or inside article route)
-  const articleRoot = document.querySelector(
-    '[data-testid="twitterArticleReadView"], [data-testid="twitterArticleRichTextView"], [data-testid="longformRichTextComponent"]'
-  ) || (url.includes("/article/") ? document.querySelector("main") : null);
+  const articleRoot =
+    document.querySelector(
+      '[data-testid="twitterArticleReadView"], [data-testid="twitterArticleRichTextView"], [data-testid="longformRichTextComponent"]'
+    ) || (url.includes('/article/') ? document.querySelector('main') : null);
 
   if (articleRoot) {
     return extractXArticle(articleRoot, url);
   }
 
-  // 3. If on a status page and an Article card/link exists, try clicking it to open article view
-  const articleCardLink = document.querySelector(
+  // 4. Expand only the requested post; quoted posts and replies retain their state.
+  const statusId = new URL(url).pathname.match(/\/status\/(\d+)/)?.[1];
+  const requestedTweet = [...document.querySelectorAll('article[data-testid="tweet"]')].find(tweet =>
+    [...tweet.querySelectorAll('a[href]')].some(
+      link =>
+        link.querySelector('time') &&
+        !tweet.contains(link.closest('div[role="link"]')) &&
+        link.closest('article[data-testid="tweet"]') === tweet &&
+        new URL(link.href, url).pathname.match(/\/status\/(\d+)/)?.[1] === statusId
+    )
+  );
+  const target = statusId ? requestedTweet : document;
+  // Preserve only the requested post's linked article, without navigating.
+  const articleCardLink = target?.querySelector(
     'a[href*="/article/"], [data-testid="card.layoutLarge.detail"] a, [data-testid="article-cover"], [data-testid="card.wrapper"] a[href*="/article/"]'
   );
-  if (articleCardLink) {
-    try {
-      articleCardLink.click();
-      if (typeof waitFor === "function") {
-        const openedRoot = await waitFor(
-          () => document.querySelector('[data-testid="twitterArticleReadView"], [data-testid="twitterArticleRichTextView"]'),
-          1500
-        );
-        if (openedRoot) {
-          return extractXArticle(openedRoot, window.location.href);
-        }
-      }
-    } catch {
-      // Ignore click error and continue with tweet extraction
-    }
-  }
-
-  // 4. Expand all "Show more" buttons on truncated long-form posts
-  const showMoreButtons = document.querySelectorAll('[data-testid="tweet-text-show-more-link"]');
+  const showMoreButtons = target?.querySelectorAll('[data-testid="tweet-text-show-more-link"]') || [];
+  let expanded = false;
   for (const btn of showMoreButtons) {
     try {
+      context?.check();
+      if (btn.isConnected === false || (statusId && btn.closest('article[data-testid="tweet"]') !== target))
+        continue;
+      if (target?.contains(btn.closest('div[role="link"]'))) continue;
       btn.click();
+      expanded = true;
     } catch {}
   }
-  if (showMoreButtons.length > 0) {
-    await new Promise((r) => setTimeout(r, 150));
+  if (expanded) {
+    await capturePause(150, context);
+    context?.check();
   }
 
   // 5. Author info
-  const mainTweet = document.querySelector('article[data-testid="tweet"]');
+  context?.check();
+  const mainTweet = requestedTweet || (!statusId ? document.querySelector('article[data-testid="tweet"]') : null);
+  const body = mainTweet?.querySelector('[data-testid="tweetText"]');
+  const bodyReady = Boolean(
+    body?.textContent?.trim() &&
+      mainTweet.isConnected !== false &&
+      !mainTweet.matches?.('[aria-busy="true"]') &&
+      !body.matches?.('[aria-busy="true"]') &&
+      !body.querySelector('[aria-busy="true"], [role="progressbar"]') &&
+      ![...mainTweet.querySelectorAll('[data-testid="tweet-text-show-more-link"]')].some(
+        btn =>
+          btn.closest('article[data-testid="tweet"]') === mainTweet &&
+          !mainTweet.contains(btn.closest('div[role="link"]'))
+      )
+  );
   const { authorName, authorHandle } = extractAuthorInfo(mainTweet || document);
-  const timestamp = (mainTweet || document).querySelector("time")?.getAttribute("datetime") || "";
+  const timestamp = (mainTweet || document).querySelector('time')?.getAttribute('datetime') || '';
 
   // 6. Main tweet
-  let tweetContent = mainTweet ? extractMainTweet(mainTweet) : "";
+  let tweetContent = mainTweet ? extractMainTweet(mainTweet) : '';
 
   // Fallback: collect all visible tweet texts if main tweet didn't yield text
-  if (!tweetContent) {
+  if (!tweetContent && !statusId) {
     const tweetTexts = document.querySelectorAll('[data-testid="tweetText"]');
     tweetContent = [...tweetTexts]
-      .map((el) => el.textContent?.trim()).filter(Boolean)
-      .join("\n\n---\n\n");
+      .map(el => el.textContent?.trim())
+      .filter(Boolean)
+      .join('\n\n---\n\n');
   }
 
   // Fallback: check primary column / main text
-  if (!tweetContent) {
+  if (!tweetContent && !statusId) {
     const primaryCol = document.querySelector('[data-testid="primaryColumn"]');
-    if (primaryCol && typeof extractText === "function") {
+    if (primaryCol && typeof extractText === 'function') {
       tweetContent = extractText(primaryCol);
     }
   }
 
   // If there was an article card that couldn't be opened, extract its details into the content
   if (articleCardLink) {
-    const cardContainer = (typeof articleCardLink.closest === "function" &&
-      articleCardLink.closest('[data-testid="card.layoutLarge.detail"], [data-testid="card.wrapper"]')) || articleCardLink;
-    const headingEl = cardContainer.querySelector(
-      '[role="heading"], h2, h3, [data-testid*="title"], div[dir="auto"], span[dir="auto"]'
-    ) || cardContainer.querySelector("div, span");
-    const cardTitle = headingEl?.textContent?.trim() || "";
+    const cardContainer =
+      (typeof articleCardLink.closest === 'function' &&
+        articleCardLink.closest('[data-testid="card.layoutLarge.detail"], [data-testid="card.wrapper"]')) ||
+      articleCardLink;
+    const headingEl =
+      cardContainer.querySelector(
+        '[role="heading"], h2, h3, [data-testid*="title"], div[dir="auto"], span[dir="auto"]'
+      ) || cardContainer.querySelector('div, span');
+    const cardTitle = headingEl?.textContent?.trim() || '';
     const snippets = Array.from(cardContainer.querySelectorAll('div, span, p'))
-      .map((el) => el.textContent?.trim())
-      .filter((t) => t && t !== cardTitle && !t.includes("http") && t.length < 200);
-    const cardSnippet = snippets[0] || "";
-    const cardHref = articleCardLink.getAttribute("href") || "";
+      .map(el => el.textContent?.trim())
+      .filter(t => t && t !== cardTitle && !t.includes('http') && t.length < 200);
+    const cardSnippet = snippets[0] || '';
+    const cardHref = articleCardLink.getAttribute('href') || '';
     const cardInfo = [
-      cardTitle ? `\n\n### 📰 Article: ${cardTitle}` : "",
-      cardSnippet ? `\n${cardSnippet}` : "",
-      cardHref ? `\n🔗 ${cardHref.startsWith("http") ? cardHref : `https://x.com${cardHref}`}` : "",
-    ].filter(Boolean).join("");
+      cardTitle ? `\n\n### 📰 Article: ${cardTitle}` : '',
+      cardSnippet ? `\n${cardSnippet}` : '',
+      cardHref ? `\n🔗 ${cardHref.startsWith('http') ? cardHref : `https://x.com${cardHref}`}` : '',
+    ]
+      .filter(Boolean)
+      .join('');
     if (cardInfo && !tweetContent.includes(cardTitle)) {
-      tweetContent = (tweetContent ? `${tweetContent}\n\n---\n` : "") + cardInfo;
+      tweetContent = (tweetContent ? `${tweetContent}\n\n---\n` : '') + cardInfo;
     }
   }
 
   // Fallback: use page title (twitter puts tweet text in title)
   if (!tweetContent) {
-    tweetContent = document.title
-      .replace(/^(.+?)\s*\/\s*X\s*$/, "$1")
-      .replace(/^(.+?)\s*\/\s*Twitter\s*$/, "$1");
+    tweetContent = document.title.replace(/^(.+?)\s*\/\s*X\s*$/, '$1').replace(/^(.+?)\s*\/\s*Twitter\s*$/, '$1');
   }
 
   // Thread detection
   const threadTweets = document.querySelectorAll('article[data-testid="tweet"]');
-  if (threadTweets.length > 1 && mainTweet) {
+  if (!statusId && threadTweets.length > 1 && mainTweet) {
     const threadContent = [...threadTweets]
       .map((tweet, i) => {
         const text = tweet.querySelector('[data-testid="tweetText"]')?.textContent?.trim();
         const user = formatTwitterAuthor(tweet);
-        return text ? `${i + 1}. **${user || "..."}**: ${text}` : null;
+        return text ? `${i + 1}. **${user || '...'}**: ${text}` : null;
       })
-      .filter(Boolean).join("\n\n");
+      .filter(Boolean)
+      .join('\n\n');
     if (threadContent) tweetContent = `## Thread (${threadTweets.length} tweets)\n\n${threadContent}`;
   }
 
-  const title = authorName ? `Tweet by ${authorName}${authorHandle ? ` (${authorHandle})` : ""}` : `Tweet from ${url}`;
+  const title = authorName ? `Tweet by ${authorName}${authorHandle ? ` (${authorHandle})` : ''}` : `Tweet from ${url}`;
   return {
     url,
     title,
-    content: `# ${title}\n\n${tweetContent || "Could not extract tweet content."}`,
-    sourceType: "twitter",
+    content: `# ${title}\n\n${tweetContent || 'Could not extract tweet content.'}`,
+    sourceType: 'twitter',
+    // Reply loaders are unrelated to the requested post's readiness.
+    extractionStatus: bodyReady ? 'ready' : 'not_ready',
     metadata: {
-      platform: "Twitter/X",
+      platform: 'Twitter/X',
       ...(authorName && { author: authorName }),
       ...(authorHandle && { handle: authorHandle }),
       ...(timestamp && { published: timestamp }),
-      time_estimate_minutes: typeof estimateTime === "function" ? estimateTime(tweetContent, "twitter") : 2,
+      time_estimate_minutes: typeof estimateTime === 'function' ? estimateTime(tweetContent, 'twitter') : 2,
     },
   };
 }
 
 function extractXArticle(root, url) {
   // Title extraction
-  const titleEl = document.querySelector(
-    '[data-testid="twitter-article-title"], h1.longform-header-one, h1.longform-header-one-narrow, h1[role="heading"]'
-  ) || root.querySelector("h1, h2");
+  const titleEl =
+    document.querySelector(
+      '[data-testid="twitter-article-title"], h1.longform-header-one, h1.longform-header-one-narrow, h1[role="heading"]'
+    ) || root.querySelector('h1, h2');
 
-  let title = titleEl?.textContent?.trim() || "";
+  let title = titleEl?.textContent?.trim() || '';
   if (!title) {
     // Fallback: extract title from document.title: "Title / X" or "Author on X: Title / X"
     title = document.title
-      .replace(/\s*\/\s*(?:X|Twitter)$/i, "")
-      .replace(/^.*?\son\s+(?:X|Twitter):\s*["“]?/i, "")
-      .replace(/["”]?$/, "")
+      .replace(/\s*\/\s*(?:X|Twitter)$/i, '')
+      .replace(/^.*?\son\s+(?:X|Twitter):\s*["“]?/i, '')
+      .replace(/["”]?$/, '')
       .trim();
   }
   if (!title) title = `X Article from ${url}`;
@@ -172,28 +202,28 @@ function extractXArticle(root, url) {
   const { authorName, authorHandle } = extractAuthorInfo();
 
   // Published time
-  const timeEl = root.querySelector("time") || document.querySelector("time");
-  const timestamp = timeEl?.getAttribute("datetime") || timeEl?.textContent?.trim() || "";
+  const timeEl = root.querySelector('time') || document.querySelector('time');
+  const timestamp = timeEl?.getAttribute('datetime') || timeEl?.textContent?.trim() || '';
 
   // Body extraction
   const articleBody = extractXArticleBody(root, title);
 
   // Images
   const images = Array.from(root.querySelectorAll('img[src*="pbs.twimg.com/media"], [data-testid="tweetPhoto"] img'))
-    .map((img) => img.src)
+    .map(img => img.src)
     .filter((src, idx, arr) => src && arr.indexOf(src) === idx);
 
   const parts = [`# ${title}`];
   const metaParts = [];
   if (authorName || authorHandle) {
-    metaParts.push(`**Author:** ${authorName} ${authorHandle ? `(${authorHandle})` : ""}`.trim());
+    metaParts.push(`**Author:** ${authorName} ${authorHandle ? `(${authorHandle})` : ''}`.trim());
   }
   if (timestamp) {
     metaParts.push(`**Published:** ${timestamp}`);
   }
   metaParts.push(`**Platform:** Twitter/X Article`);
   if (metaParts.length > 0) {
-    parts.push(metaParts.join(" | "));
+    parts.push(metaParts.join(' | '));
   }
 
   if (articleBody) {
@@ -206,62 +236,82 @@ function extractXArticle(root, url) {
     parts.push(`\n📷 ${images.length} image(s) in article`);
   }
 
-  const fullContent = parts.join("\n");
+  const fullContent = parts.join('\n');
 
   return {
     url,
     title,
     content: fullContent,
-    sourceType: "twitter",
+    sourceType: 'twitter',
+    // Replies and recommendations can keep loading after the article is ready.
+    // Only loading indicators in the captured article should delay extraction.
+    extractionStatus:
+      articleBody &&
+      !root.matches?.('[aria-busy="true"]') &&
+      !root.querySelector('[aria-busy="true"], [role="progressbar"]')
+        ? 'ready'
+        : 'not_ready',
     metadata: {
-      platform: "Twitter/X",
+      platform: 'Twitter/X',
       isArticle: true,
       ...(authorName && { author: authorName }),
       ...(authorHandle && { handle: authorHandle }),
       ...(timestamp && { published: timestamp }),
-      time_estimate_minutes: typeof estimateTime === "function" ? estimateTime(fullContent, "article") : 5,
+      time_estimate_minutes: typeof estimateTime === 'function' ? estimateTime(fullContent, 'article') : 5,
     },
   };
 }
 
 function extractXArticleBody(root, articleTitle) {
-  const richContainer = root.querySelector(
-    '[data-testid="twitterArticleRichTextView"], [data-testid="longformRichTextComponent"], .public-DraftEditor-content'
-  ) || root;
+  const richContainer =
+    root.querySelector(
+      '[data-testid="twitterArticleRichTextView"], [data-testid="longformRichTextComponent"], .public-DraftEditor-content'
+    ) || root;
 
   const blockSelector = [
-    ".longform-header-one",
-    ".longform-header-one-narrow",
-    ".longform-header-two",
-    ".longform-header-two-narrow",
-    ".longform-unstyled",
-    ".longform-unstyled-narrow",
-    ".longform-blockquote",
-    ".longform-blockquote-narrow",
-    ".longform-unordered-list-item",
-    ".longform-unordered-list-item-narrow",
-    ".longform-ordered-list-item",
-    ".longform-ordered-list-item-narrow",
+    '.longform-header-one',
+    '.longform-header-one-narrow',
+    '.longform-header-two',
+    '.longform-header-two-narrow',
+    '.longform-unstyled',
+    '.longform-unstyled-narrow',
+    '.longform-blockquote',
+    '.longform-blockquote-narrow',
+    '.longform-unordered-list-item',
+    '.longform-unordered-list-item-narrow',
+    '.longform-ordered-list-item',
+    '.longform-ordered-list-item-narrow',
     'section[data-block="true"]',
     '[data-testid="markdown-code-block"]',
-    "h1", "h2", "h3", "h4", "p", "blockquote", "li", "pre"
-  ].join(", ");
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'p',
+    'blockquote',
+    'li',
+    'pre',
+  ].join(', ');
 
   const rawElements = Array.from(richContainer.querySelectorAll(blockSelector));
 
   // Filter out elements that are descendants of another matched element to avoid duplicate nested text
-  const elements = rawElements.filter((el) => {
+  const elements = rawElements.filter(el => {
     if (!el || !el.textContent?.trim()) return false;
     // Don't include the main title element
     if (articleTitle && el.textContent.trim().toLowerCase() === articleTitle.trim().toLowerCase()) {
       return false;
     }
     // Exclude avatars, nav, headers, action buttons
-    if (el.closest('[data-testid="User-Name"], [data-testid="UserAvatar-Container"], nav, header, [role="button"], [role="group"]')) {
+    if (
+      el.closest(
+        '[data-testid="User-Name"], [data-testid="UserAvatar-Container"], nav, header, [role="button"], [role="group"]'
+      )
+    ) {
       return false;
     }
     // Skip if another matched element contains this one
-    return !rawElements.some((other) => other !== el && other.contains(el));
+    return !rawElements.some(other => other !== el && other.contains(el));
   });
 
   const lines = [];
@@ -277,7 +327,10 @@ function extractXArticleBody(root, articleTitle) {
     } else if (el.matches('.longform-header-two, .longform-header-two-narrow, h3, h4')) {
       lines.push(`\n### ${text}\n`);
     } else if (el.matches('.longform-blockquote, .longform-blockquote-narrow, blockquote')) {
-      const quoted = text.split("\n").map((l) => `> ${l}`).join("\n");
+      const quoted = text
+        .split('\n')
+        .map(l => `> ${l}`)
+        .join('\n');
       lines.push(`\n${quoted}\n`);
     } else if (
       el.matches('.longform-unordered-list-item, .longform-unordered-list-item-narrow') ||
@@ -296,47 +349,55 @@ function extractXArticleBody(root, articleTitle) {
     }
   }
 
-  let content = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  let content = lines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   if (content) {
     return content;
   }
 
   // Fallback: extractText on container
   try {
-    if (typeof extractText === "function" && typeof richContainer.cloneNode === "function") {
+    if (typeof extractText === 'function' && typeof richContainer.cloneNode === 'function') {
       return extractText(richContainer);
     }
   } catch {}
-  return (richContainer.textContent || "").trim();
+  return (richContainer.textContent || '').trim();
 }
 
 function extractAuthorInfo(root = document, usePageFallback = true) {
-  let authorName = "";
-  let authorHandle = "";
+  let authorName = '';
+  let authorHandle = '';
 
   const userNameEl = root.querySelector('[data-testid="User-Name"]');
   if (userNameEl) {
     // The whole User-Name header also contains the post date, separators and
     // badges. Read account profile links, excluding status/timestamp links.
-    const profiles = Array.from(userNameEl.querySelectorAll("a")).map(link => {
-      const href = (link.getAttribute("href") || "").replace(/^https?:\/\/(?:www\.)?(?:x|twitter)\.com(?=\/)/i, "");
-      const match = href.match(/^\/([A-Za-z0-9_]{1,15})\/?(?:[?#].*)?$/);
-      const label = link.cloneNode(true);
-      label.querySelectorAll('svg, time, [role="button"]').forEach(node => node.remove());
-      return match ? { handle: `@${match[1]}`, label: (label.textContent || "").replace(/\s+/g, " ").trim() } : null;
-    }).filter(Boolean);
-    authorHandle = profiles.find(profile => profile.label)?.handle || profiles[0]?.handle || "";
-    const named = profiles.find(profile => profile.handle.toLowerCase() === authorHandle.toLowerCase() && profile.label && !profile.label.startsWith("@"));
+    const profiles = Array.from(userNameEl.querySelectorAll('a'))
+      .map(link => {
+        const href = (link.getAttribute('href') || '').replace(/^https?:\/\/(?:www\.)?(?:x|twitter)\.com(?=\/)/i, '');
+        const match = href.match(/^\/([A-Za-z0-9_]{1,15})\/?(?:[?#].*)?$/);
+        const label = link.cloneNode(true);
+        label.querySelectorAll('svg, time, [role="button"]').forEach(node => node.remove());
+        return match ? { handle: `@${match[1]}`, label: (label.textContent || '').replace(/\s+/g, ' ').trim() } : null;
+      })
+      .filter(Boolean);
+    authorHandle = profiles.find(profile => profile.label)?.handle || profiles[0]?.handle || '';
+    const named = profiles.find(
+      profile =>
+        profile.handle.toLowerCase() === authorHandle.toLowerCase() && profile.label && !profile.label.startsWith('@')
+    );
     if (named) authorName = named.label;
 
     if (!authorName) {
       // Text-only headers remain a fallback, after removing timestamp UI.
       const cleanHeader = userNameEl.cloneNode(true);
       cleanHeader.querySelectorAll('time, a[href*="/status/"], svg, [role="button"]').forEach(node => node.remove());
-      const header = (cleanHeader.textContent || "").replace(/\s+/g, " ").trim();
-      authorHandle ||= header.match(/@[A-Za-z0-9_]{1,15}(?=$|[\s·])/)?.[0] || "";
+      const header = (cleanHeader.textContent || '').replace(/\s+/g, ' ').trim();
+      authorHandle ||= header.match(/@[A-Za-z0-9_]{1,15}(?=$|[\s·])/)?.[0] || '';
       const handleIndex = authorHandle ? header.toLowerCase().indexOf(authorHandle.toLowerCase()) : -1;
-      authorName = (handleIndex >= 0 ? header.slice(0, handleIndex) : header).replace(/[\s·]+$/, "");
+      authorName = (handleIndex >= 0 ? header.slice(0, handleIndex) : header).replace(/[\s·]+$/, '');
     }
     // Some layouts put display name and handle together in the profile link.
     if (authorHandle && authorName.toLowerCase().endsWith(authorHandle.toLowerCase())) {
@@ -347,7 +408,10 @@ function extractAuthorInfo(root = document, usePageFallback = true) {
   // Fallback: extract handle from URL: x.com/<handle>/status/... or /article/...
   if (!authorHandle && usePageFallback) {
     const urlMatch = window.location.pathname.match(/^\/([A-Za-z0-9_]{1,15})(?:\/status|\/article|$)/);
-    if (urlMatch && !["home", "explore", "notifications", "messages", "i", "search"].includes(urlMatch[1].toLowerCase())) {
+    if (
+      urlMatch &&
+      !['home', 'explore', 'notifications', 'messages', 'i', 'search'].includes(urlMatch[1].toLowerCase())
+    ) {
       authorHandle = `@${urlMatch[1]}`;
       if (!authorName) authorName = urlMatch[1];
     }
@@ -358,7 +422,7 @@ function extractAuthorInfo(root = document, usePageFallback = true) {
 
 function formatTwitterAuthor(root) {
   const { authorName, authorHandle } = extractAuthorInfo(root, false);
-  return authorName ? `${authorName}${authorHandle ? ` (${authorHandle})` : ""}` : authorHandle;
+  return authorName ? `${authorName}${authorHandle ? ` (${authorHandle})` : ''}` : authorHandle;
 }
 
 function extractMainTweet(tweetElement) {
@@ -373,13 +437,15 @@ function extractMainTweet(tweetElement) {
   const quoteTweet = tweetElement.querySelector('div[role="link"] [data-testid="tweetText"]');
   if (quoteTweet && quoteTweet.textContent?.trim() !== text) {
     const quoteRoot = quoteTweet.closest('div[role="link"]');
-    const quoteAuthor = quoteRoot ? formatTwitterAuthor(quoteRoot) : "";
-    parts.push(`\n> **Quoted Tweet${quoteAuthor ? ` (${quoteAuthor})` : ""}:**\n> ${quoteTweet.textContent.trim().replace(/\n/g, "\n> ")}`);
+    const quoteAuthor = quoteRoot ? formatTwitterAuthor(quoteRoot) : '';
+    parts.push(
+      `\n> **Quoted Tweet${quoteAuthor ? ` (${quoteAuthor})` : ''}:**\n> ${quoteTweet.textContent.trim().replace(/\n/g, '\n> ')}`
+    );
   }
 
-  tweetElement.querySelectorAll('a[href*="http"]').forEach((link) => {
-    const href = link.getAttribute("href");
-    if (href && !href.includes("twitter.com") && !href.includes("x.com")) {
+  tweetElement.querySelectorAll('a[href*="http"]').forEach(link => {
+    const href = link.getAttribute('href');
+    if (href && !['twitter.com', 'x.com'].some(domain => NutEggPageIdentity.hostMatches(href, domain))) {
       parts.push(`\n🔗 ${href}`);
     }
   });
@@ -390,5 +456,5 @@ function extractMainTweet(tweetElement) {
   const stats = tweetElement.querySelector('[role="group"]')?.textContent?.trim();
   if (stats) parts.push(`\n📊 ${stats}`);
 
-  return parts.join("\n");
+  return parts.join('\n');
 }

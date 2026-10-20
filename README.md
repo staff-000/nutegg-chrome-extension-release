@@ -1,11 +1,11 @@
 # 🌰/🥚 NutEgg Chrome Extension
 
 > **Read less, hatch more, save time.**  
-> Capture web pages, tweets, and YouTube videos, analyze content with AI, and curate knowledge directly into Obsidian.
+> Understand web pages, tweets, and YouTube videos with summaries, mind maps, and answers in Chrome.
 
-The NutEgg Chrome Extension works alongside your local [NutEgg Obsidian Plugin](https://github.com/staff-000/nutegg-obsidian-release) to capture what you browse and turn information overload into structured, personal knowledge.
+NutEgg works directly in Chrome. Open Settings, choose your AI provider, paste your API key, and click **Save & continue**. Return to a page and click **Analyze** in the NutEgg side panel. The model and reading preferences are ready to use; you can customize them in the expandable settings sections.
 
-It is a two-part system that helps you stop mindless browsing and start building your knowledge base:
+For optional knowledge curation, connect the [NutEgg Obsidian Plugin](https://github.com/staff-000/nutegg-obsidian-release):
 
 - **Chrome Extension** — Grabs content from any webpage, tweet, or YouTube video (with transcripts). We call these raw captures **nuts** 🌰. 
 - **Obsidian Plugin** — Analyzes content with AI, answers your egg-specific questions and recommends what to read, and curates your knowledge base. We call these organized knowledge trees **eggs** 🥚.
@@ -38,8 +38,8 @@ It is a two-part system that helps you stop mindless browsing and start building
   - Compares extracted entries against your existing Obsidian knowledge trees ("Eggs").
   - Highlights **✨ New Insights** in one view and identifies **✅ Already in Tree** items so you don't waste time re-learning known concepts.
 - **⚡ Dual Modes**:
-  - **Standalone Chrome Mode**: Configure API keys in extension options to summarize, mind-map, and chat without Obsidian running.
-  - **Obsidian Connected Mode**: Automatically syncs knowledge to your local vault.
+  - **Chrome Mode (default)**: Add your API key in Settings to summarize, mind-map, and ask questions directly in Chrome.
+  - **Obsidian Mode (optional)**: Enable it in Settings to use Obsidian's AI configuration and save knowledge to your local vault.
 - **Quick Capture Actions**:
   - **🥚 Hatch Egg**: Extracts fresh insights and attaches them hierarchically into your structured knowledge trees in Obsidian.
   - **🌰 Collect Nut**: Saves a clean, raw markdown copy of the web page or video transcript into your vault archive (`nutegg/_raw/`).
@@ -75,16 +75,20 @@ Install directly with 1 click from the [Chrome Web Store](https://chromewebstore
 
 ## 🚀 Pairing with Obsidian
 
-Connecting the extension to Obsidian is automatic:
+Obsidian is optional. To connect your vault:
 
 1. **Install the Obsidian Plugin**: Get [NutEgg from Obsidian Community Plugins](https://community.obsidian.md/plugins/nutegg).
 2. **Keep Obsidian Running**: Ensure Obsidian is open with the NutEgg plugin enabled. The plugin automatically runs a local sync server on port `27123`.
-2. **Check Connection Status**: Open the NutEgg extension popup. When the status indicator in the header turns **green** (`Connected`), you're ready to capture!
-3. **Settings & Custom Port** *(Optional)*: If the indicator is red or disconnected, click the ⚙️ (Settings) icon to ensure the Obsidian server port matches (default: `27123`) and click **Test Connection**.
+3. **Enable Obsidian Mode**: In NutEgg Settings, expand **Connect Obsidian** and enable **Use Obsidian mode**. Configure your AI key in Obsidian → Settings → NutEgg.
+4. **Check Connection**: Keep the default port `27123` unless you changed it in Obsidian, then click **Test Connection**.
+
+Turn off **Connect Obsidian** or choose **Use Chrome instead** to return to browser analysis. This explicit switch also selects API-key mode in the connected Obsidian before disconnecting. If Obsidian cannot acknowledge the change, Chrome still switches and shows a warning. Chrome-only analysis uses its saved API configuration; merely opening Chrome-only settings does not change Obsidian. Obsidian mode requires the plugin to remain running and does not silently switch to another AI configuration when its connection fails. Existing Obsidian users upgrading to this version should enable **Use Obsidian mode** once.
 
 ---
 
 ## 🔗 Related Repositories
+
+Extractor contributors: follow the [content extractor guide](../docs/content-extractor-contributing.md) for registration, capture ownership, fixtures, and validation.
 
 Popup developers: see [tab state, async operations and diagnostics](src/popup/README.md)
 for ownership rules, race-condition tests and the concurrent-tab verification steps.

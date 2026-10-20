@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
   "default_locale": "en",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "__MSG_extensionDescription__",
   "permissions": [
     "activeTab",
@@ -60,10 +60,16 @@
         "<all_urls>"
       ],
       "js": [
+        "dist/page-identity.js",
         "src/content/utils.js",
+        "src/content/dom-reader.js",
         "src/content/extractors/youtube.js",
         "src/content/extractors/twitter.js",
-        "src/content/extractors/chinese.js",
+        "src/content/extractors/chinese-common.js",
+        "src/content/extractors/bilibili.js",
+        "src/content/extractors/douyin.js",
+        "src/content/extractors/weibo.js",
+        "src/content/extractors/zhihu.js",
         "src/content/extractors/discussion.js",
         "src/content/extractors/forum.js",
         "src/content/extractors/tiktok.js",
@@ -83,5 +89,6 @@
       },
       "description": "Quick capture current page."
     }
-  }
+  },
+  "minimum_chrome_version": "116"
 }
