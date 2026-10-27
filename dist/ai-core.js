@@ -61,7 +61,6 @@ var NutEggAI = (() => {
     discussionSummaryText: () => discussionSummaryText,
     extractCallout: () => extractCallout,
     extractEggLanguage: () => extractEggLanguage,
-    findOpenRouterFamily: () => findOpenRouterFamily,
     findSection: () => findSection,
     formatEggForPrompt: () => formatEggForPrompt,
     formatEggInstructionsForPrompt: () => formatEggInstructionsForPrompt,
@@ -1777,7 +1776,7 @@ ${refs}` : ""}`;
       if (request.protocol === ApiProtocol.Claude) {
         headers["x-api-key"] = key;
         headers["anthropic-version"] = "2023-06-01";
-        if (typeof window !== "undefined")
+        if (typeof window !== "undefined" || typeof importScripts === "function" || typeof WorkerGlobalScope !== "undefined" && globalThis instanceof WorkerGlobalScope)
           headers["anthropic-dangerous-direct-browser-access"] = "true";
       } else if (request.protocol === ApiProtocol.Gemini)
         headers["x-goog-api-key"] = key;
@@ -2254,60 +2253,11 @@ ${refs}` : ""}`;
   var OFFICIAL_CONFIG = PRESET_CONFIGS.official;
   var TEXT_PROCESS_CONFIG = PRESET_CONFIGS["text-process"];
 
-  // shared/src/generated-models.mjs
-  var GENERATED_PROVIDERS = [
-    {
-      "id": "local",
-      "label": "Local",
-      "connection": {
-        "baseUrl": "",
-        "protocol": "openai-compatible"
-      }
-    },
-    {
-      "id": "anthropic",
-      "label": "Anthropic",
-      "connection": {
-        "baseUrl": "https://api.anthropic.com/v1",
-        "protocol": "claude"
-      }
-    },
-    {
-      "id": "deepseek",
-      "label": "DeepSeek",
-      "connection": {
-        "baseUrl": "https://api.deepseek.com/v1",
-        "protocol": "openai-compatible"
-      }
-    },
-    {
-      "id": "google",
-      "label": "Google",
-      "connection": {
-        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
-        "protocol": "gemini"
-      }
-    },
-    {
-      "id": "openai",
-      "label": "OpenAI",
-      "connection": {
-        "baseUrl": "https://api.openai.com/v1",
-        "protocol": "openai-compatible"
-      }
-    },
-    {
-      "id": "openrouter",
-      "label": "OpenRouter",
-      "connection": {
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "protocol": "openai-compatible"
-      }
-    }
-  ];
-  var GENERATED_MODELS = [
+  // shared/generated/models.mjs
+  var models = Object.freeze([
     {
       "id": "anthropic/claude-haiku-5-5",
+      "creatorId": "anthropic",
       "providerId": "anthropic",
       "modelId": "anthropic/claude-haiku-5-5",
       "apiModelId": "claude-haiku-5-5",
@@ -2393,7 +2343,182 @@ ${refs}` : ""}`;
       }
     },
     {
+      "id": "openrouter/anthropic/claude-haiku-5.5",
+      "creatorId": "anthropic",
+      "providerId": "openrouter",
+      "modelId": "anthropic/claude-haiku-5-5",
+      "apiModelId": "anthropic/claude-haiku-5.5",
+      "name": "Claude Haiku 5.5",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 1e6,
+        "input": null,
+        "output": 128e3,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "flash",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
+      "id": "openrouter/~anthropic/claude-haiku-latest",
+      "creatorId": "anthropic",
+      "providerId": "openrouter",
+      "modelId": "openrouter/~anthropic/claude-haiku-latest",
+      "apiModelId": "~anthropic/claude-haiku-latest",
+      "name": "Claude Haiku Latest",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 1e6,
+        "input": null,
+        "output": 128e3,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "flash",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
       "id": "anthropic/claude-sonnet-5",
+      "creatorId": "anthropic",
       "providerId": "anthropic",
       "modelId": "anthropic/claude-sonnet-5",
       "apiModelId": "claude-sonnet-5",
@@ -2479,7 +2604,95 @@ ${refs}` : ""}`;
       }
     },
     {
+      "id": "openrouter/anthropic/claude-sonnet-5",
+      "creatorId": "anthropic",
+      "providerId": "openrouter",
+      "modelId": "anthropic/claude-sonnet-5",
+      "apiModelId": "anthropic/claude-sonnet-5",
+      "name": "Claude Sonnet 5",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 1e6,
+        "input": null,
+        "output": 128e3,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "workhorse",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
       "id": "anthropic/claude-sonnet-5-5",
+      "creatorId": "anthropic",
       "providerId": "anthropic",
       "modelId": "anthropic/claude-sonnet-5-5",
       "apiModelId": "claude-sonnet-5-5",
@@ -2565,7 +2778,95 @@ ${refs}` : ""}`;
       }
     },
     {
+      "id": "openrouter/anthropic/claude-sonnet-5.5",
+      "creatorId": "anthropic",
+      "providerId": "openrouter",
+      "modelId": "anthropic/claude-sonnet-5-5",
+      "apiModelId": "anthropic/claude-sonnet-5.5",
+      "name": "Claude Sonnet 5.5",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 1e6,
+        "input": null,
+        "output": 128e3,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "workhorse",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
       "id": "deepseek/deepseek-chat",
+      "creatorId": "deepseek",
       "providerId": "deepseek",
       "modelId": "deepseek/deepseek-chat",
       "apiModelId": "deepseek-chat",
@@ -2611,7 +2912,264 @@ ${refs}` : ""}`;
       }
     },
     {
+      "id": "openrouter/deepseek/deepseek-chat",
+      "creatorId": "deepseek",
+      "providerId": "openrouter",
+      "modelId": "deepseek/deepseek-chat",
+      "apiModelId": "deepseek/deepseek-chat",
+      "name": "DeepSeek Chat",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 163840,
+        "input": null,
+        "output": 16384,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "workhorse",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "unsupported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "unknown"
+        }
+      },
+      "provider": {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
+      "id": "openrouter/~deepseek/deepseek-flash-latest",
+      "creatorId": "deepseek",
+      "providerId": "openrouter",
+      "modelId": "openrouter/~deepseek/deepseek-flash-latest",
+      "apiModelId": "~deepseek/deepseek-flash-latest",
+      "name": "DeepSeek Flash Latest",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 1048576,
+        "input": null,
+        "output": 943718,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "flash",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
+      "id": "openrouter/deepseek/deepseek-v3.2",
+      "creatorId": "deepseek",
+      "providerId": "openrouter",
+      "modelId": "deepseek/deepseek-v3.2",
+      "apiModelId": "deepseek/deepseek-v3.2",
+      "name": "DeepSeek V3.2",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 163840,
+        "input": null,
+        "output": 65536,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "workhorse",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "supported"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "unknown"
+        }
+      },
+      "provider": {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
       "id": "deepseek/deepseek-flash",
+      "creatorId": "deepseek",
       "providerId": "deepseek",
       "modelId": "deepseek/deepseek-v4.1-flash",
       "apiModelId": "deepseek-flash",
@@ -2696,7 +3254,94 @@ ${refs}` : ""}`;
       }
     },
     {
+      "id": "openrouter/deepseek/deepseek-v4.1-flash",
+      "creatorId": "deepseek",
+      "providerId": "openrouter",
+      "modelId": "deepseek/deepseek-v4.1-flash",
+      "apiModelId": "deepseek/deepseek-v4.1-flash",
+      "name": "DeepSeek V4.1 Flash",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 1048576,
+        "input": null,
+        "output": 393216,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "flash",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
       "id": "google/gemini-3.7-flash",
+      "creatorId": "google",
       "providerId": "google",
       "modelId": "google/gemini-3.7-flash",
       "apiModelId": "gemini-3.7-flash",
@@ -2784,866 +3429,8 @@ ${refs}` : ""}`;
       }
     },
     {
-      "id": "google/gemini-3.8-flash",
-      "providerId": "google",
-      "modelId": "google/gemini-3.8-flash",
-      "apiModelId": "gemini-3.8-flash",
-      "name": "Gemini 3.8 Flash",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
-        "protocol": "gemini"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 1048576,
-        "input": null,
-        "output": 65536,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text",
-          "image",
-          "video",
-          "audio",
-          "pdf"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "flash",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "supported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "supported"
-        }
-      },
-      "provider": {
-        "id": "google",
-        "name": "Google",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
-      "id": "openai/gpt-5.6-luna",
-      "providerId": "openai",
-      "modelId": "openai/gpt-5.6-luna",
-      "apiModelId": "gpt-5.6-luna",
-      "name": "GPT-5.6 Luna",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://api.openai.com/v1",
-        "protocol": "openai-compatible"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 105e4,
-        "input": 922e3,
-        "output": 128e3,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text",
-          "image",
-          "pdf"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "flash",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "supported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "supported"
-        }
-      },
-      "provider": {
-        "id": "openai",
-        "name": "OpenAI",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
-      "id": "openai/gpt-6-luna",
-      "providerId": "openai",
-      "modelId": "openai/gpt-6-luna",
-      "apiModelId": "gpt-6-luna",
-      "name": "GPT-6 Luna",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://api.openai.com/v1",
-        "protocol": "openai-compatible"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 105e4,
-        "input": 922e3,
-        "output": 128e3,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text",
-          "image",
-          "pdf"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "flash",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "supported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "supported"
-        }
-      },
-      "provider": {
-        "id": "openai",
-        "name": "OpenAI",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
-      "id": "openai/gpt-6-sol",
-      "providerId": "openai",
-      "modelId": "openai/gpt-6-sol",
-      "apiModelId": "gpt-6-sol",
-      "name": "GPT-6 Sol",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://api.openai.com/v1",
-        "protocol": "openai-compatible"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 105e4,
-        "input": 922e3,
-        "output": 128e3,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text",
-          "image",
-          "pdf"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "workhorse",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "supported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "supported"
-        }
-      },
-      "provider": {
-        "id": "openai",
-        "name": "OpenAI",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
-      "id": "openai/gpt-6.1-sol",
-      "providerId": "openai",
-      "modelId": "openai/gpt-6.1-sol",
-      "apiModelId": "gpt-6.1-sol",
-      "name": "GPT-6.1 Sol",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://api.openai.com/v1",
-        "protocol": "openai-compatible"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 105e4,
-        "input": 922e3,
-        "output": 128e3,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text",
-          "image",
-          "pdf"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "workhorse",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "supported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "supported"
-        }
-      },
-      "provider": {
-        "id": "openai",
-        "name": "OpenAI",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
-      "id": "openrouter/anthropic/claude-haiku-5.5",
-      "providerId": "openrouter",
-      "modelId": "anthropic/claude-haiku-5-5",
-      "apiModelId": "anthropic/claude-haiku-5.5",
-      "name": "Claude Haiku 5.5",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "protocol": "openai-compatible"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 1e6,
-        "input": null,
-        "output": 128e3,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text",
-          "image",
-          "pdf"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "flash",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "supported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "supported"
-        }
-      },
-      "provider": {
-        "id": "openrouter",
-        "name": "OpenRouter",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
-      "id": "openrouter/anthropic/claude-sonnet-5",
-      "providerId": "openrouter",
-      "modelId": "anthropic/claude-sonnet-5",
-      "apiModelId": "anthropic/claude-sonnet-5",
-      "name": "Claude Sonnet 5",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "protocol": "openai-compatible"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 1e6,
-        "input": null,
-        "output": 128e3,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text",
-          "image",
-          "pdf"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "workhorse",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "supported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "supported"
-        }
-      },
-      "provider": {
-        "id": "openrouter",
-        "name": "OpenRouter",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
-      "id": "openrouter/anthropic/claude-sonnet-5.5",
-      "providerId": "openrouter",
-      "modelId": "anthropic/claude-sonnet-5-5",
-      "apiModelId": "anthropic/claude-sonnet-5.5",
-      "name": "Claude Sonnet 5.5",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "protocol": "openai-compatible"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 1e6,
-        "input": null,
-        "output": 128e3,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text",
-          "image",
-          "pdf"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "workhorse",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "supported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "supported"
-        }
-      },
-      "provider": {
-        "id": "openrouter",
-        "name": "OpenRouter",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
-      "id": "openrouter/deepseek/deepseek-chat",
-      "providerId": "openrouter",
-      "modelId": "deepseek/deepseek-chat",
-      "apiModelId": "deepseek/deepseek-chat",
-      "name": "DeepSeek Chat",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "protocol": "openai-compatible"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 163840,
-        "input": null,
-        "output": 16384,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "workhorse",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "unsupported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "unknown"
-        }
-      },
-      "provider": {
-        "id": "openrouter",
-        "name": "OpenRouter",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
-      "id": "openrouter/deepseek/deepseek-v4.1-flash",
-      "providerId": "openrouter",
-      "modelId": "deepseek/deepseek-v4.1-flash",
-      "apiModelId": "deepseek/deepseek-v4.1-flash",
-      "name": "DeepSeek V4.1 Flash",
-      "deployment": "hosted",
-      "connection": {
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "protocol": "openai-compatible"
-      },
-      "callSupport": {
-        "textGeneration": true,
-        "reason": null
-      },
-      "limits": {
-        "context": 1048576,
-        "input": null,
-        "output": 393216,
-        "contextAccounting": "unknown"
-      },
-      "modalities": {
-        "input": [
-          "text",
-          "image"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "status": "unknown",
-      "requiresProviderOverride": false,
-      "speciality": "general",
-      "tier": "flash",
-      "features": {
-        "functionCalling": {
-          "status": "supported"
-        },
-        "parallelTools": {
-          "status": "unknown"
-        },
-        "forcedToolChoice": {
-          "status": "unknown"
-        },
-        "strictToolSchema": {
-          "status": "unknown"
-        },
-        "promptCaching": {
-          "status": "unknown"
-        },
-        "jsonMode": {
-          "status": "unknown"
-        },
-        "jsonSchema": {
-          "status": "supported"
-        },
-        "strictJsonSchema": {
-          "status": "unknown"
-        },
-        "systemMessages": {
-          "status": "unknown"
-        },
-        "developerMessages": {
-          "status": "unknown"
-        },
-        "thinking": {
-          "status": "supported"
-        },
-        "thinkingDisable": {
-          "status": "unknown"
-        },
-        "thinkingBudget": {
-          "status": "unknown"
-        },
-        "thinkingEffort": {
-          "status": "supported"
-        }
-      },
-      "provider": {
-        "id": "openrouter",
-        "name": "OpenRouter",
-        "auth": "required",
-        "deployment": "hosted"
-      }
-    },
-    {
       "id": "openrouter/google/gemini-3.7-flash",
+      "creatorId": "google",
       "providerId": "openrouter",
       "modelId": "google/gemini-3.7-flash",
       "apiModelId": "google/gemini-3.7-flash",
@@ -3731,7 +3518,97 @@ ${refs}` : ""}`;
       }
     },
     {
+      "id": "google/gemini-3.8-flash",
+      "creatorId": "google",
+      "providerId": "google",
+      "modelId": "google/gemini-3.8-flash",
+      "apiModelId": "gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "protocol": "gemini"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 1048576,
+        "input": null,
+        "output": 65536,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "flash",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "google",
+        "name": "Google",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
       "id": "openrouter/google/gemini-3.8-flash",
+      "creatorId": "google",
       "providerId": "openrouter",
       "modelId": "google/gemini-3.8-flash",
       "apiModelId": "google/gemini-3.8-flash",
@@ -3819,14 +3696,15 @@ ${refs}` : ""}`;
       }
     },
     {
-      "id": "openrouter/openai/gpt-5.6-luna",
-      "providerId": "openrouter",
-      "modelId": "openai/gpt-5.6-luna",
-      "apiModelId": "openai/gpt-5.6-luna",
-      "name": "GPT-5.6 Luna",
+      "id": "openai/gpt-6-luna",
+      "creatorId": "openai",
+      "providerId": "openai",
+      "modelId": "openai/gpt-6-luna",
+      "apiModelId": "gpt-6-luna",
+      "name": "GPT-6 Luna",
       "deployment": "hosted",
       "connection": {
-        "baseUrl": "https://openrouter.ai/api/v1",
+        "baseUrl": "https://api.openai.com/v1",
         "protocol": "openai-compatible"
       },
       "callSupport": {
@@ -3898,14 +3776,15 @@ ${refs}` : ""}`;
         }
       },
       "provider": {
-        "id": "openrouter",
-        "name": "OpenRouter",
+        "id": "openai",
+        "name": "OpenAI",
         "auth": "required",
         "deployment": "hosted"
       }
     },
     {
       "id": "openrouter/openai/gpt-6-luna",
+      "creatorId": "openai",
       "providerId": "openrouter",
       "modelId": "openai/gpt-6-luna",
       "apiModelId": "openai/gpt-6-luna",
@@ -3991,7 +3870,182 @@ ${refs}` : ""}`;
       }
     },
     {
+      "id": "openrouter/openai/gpt-6-luna-pro",
+      "creatorId": "openai",
+      "providerId": "openrouter",
+      "modelId": "openrouter/openai/gpt-6-luna-pro",
+      "apiModelId": "openai/gpt-6-luna-pro",
+      "name": "GPT-6 Luna Pro",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 105e4,
+        "input": null,
+        "output": 128e3,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "pdf",
+          "image",
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "flash",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
+      "id": "openai/gpt-6-sol",
+      "creatorId": "openai",
+      "providerId": "openai",
+      "modelId": "openai/gpt-6-sol",
+      "apiModelId": "gpt-6-sol",
+      "name": "GPT-6 Sol",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://api.openai.com/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 105e4,
+        "input": 922e3,
+        "output": 128e3,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "workhorse",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "openai",
+        "name": "OpenAI",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
       "id": "openrouter/openai/gpt-6-sol",
+      "creatorId": "openai",
       "providerId": "openrouter",
       "modelId": "openai/gpt-6-sol",
       "apiModelId": "openai/gpt-6-sol",
@@ -4077,7 +4131,95 @@ ${refs}` : ""}`;
       }
     },
     {
+      "id": "openai/gpt-6.1-sol",
+      "creatorId": "openai",
+      "providerId": "openai",
+      "modelId": "openai/gpt-6.1-sol",
+      "apiModelId": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
+      "deployment": "hosted",
+      "connection": {
+        "baseUrl": "https://api.openai.com/v1",
+        "protocol": "openai-compatible"
+      },
+      "callSupport": {
+        "textGeneration": true,
+        "reason": null
+      },
+      "limits": {
+        "context": 105e4,
+        "input": 922e3,
+        "output": 128e3,
+        "contextAccounting": "unknown"
+      },
+      "modalities": {
+        "input": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "output": [
+          "text"
+        ]
+      },
+      "status": "unknown",
+      "requiresProviderOverride": false,
+      "speciality": "general",
+      "tier": "workhorse",
+      "features": {
+        "functionCalling": {
+          "status": "supported"
+        },
+        "parallelTools": {
+          "status": "unknown"
+        },
+        "forcedToolChoice": {
+          "status": "unknown"
+        },
+        "strictToolSchema": {
+          "status": "unknown"
+        },
+        "promptCaching": {
+          "status": "unknown"
+        },
+        "jsonMode": {
+          "status": "unknown"
+        },
+        "jsonSchema": {
+          "status": "supported"
+        },
+        "strictJsonSchema": {
+          "status": "unknown"
+        },
+        "systemMessages": {
+          "status": "unknown"
+        },
+        "developerMessages": {
+          "status": "unknown"
+        },
+        "thinking": {
+          "status": "supported"
+        },
+        "thinkingDisable": {
+          "status": "unknown"
+        },
+        "thinkingBudget": {
+          "status": "unknown"
+        },
+        "thinkingEffort": {
+          "status": "supported"
+        }
+      },
+      "provider": {
+        "id": "openai",
+        "name": "OpenAI",
+        "auth": "required",
+        "deployment": "hosted"
+      }
+    },
+    {
       "id": "openrouter/openai/gpt-6.1-sol",
+      "creatorId": "openai",
       "providerId": "openrouter",
       "modelId": "openai/gpt-6.1-sol",
       "apiModelId": "openai/gpt-6.1-sol",
@@ -4162,9 +4304,25 @@ ${refs}` : ""}`;
         "deployment": "hosted"
       }
     }
-  ];
+  ]);
+  function getModelsByProvider() {
+    const grouped = {};
+    for (const m of models) {
+      const key = m.provider?.id || m.providerId || (m.local ? "local" : "unknown");
+      if (!grouped[key])
+        grouped[key] = [];
+      grouped[key].push(structuredClone(m));
+    }
+    return grouped;
+  }
+  var OfferingId = Object.freeze({ "anthropic/claude-haiku-5-5": "anthropic/claude-haiku-5-5", "openrouter/anthropic/claude-haiku-5.5": "openrouter/anthropic/claude-haiku-5.5", "openrouter/~anthropic/claude-haiku-latest": "openrouter/~anthropic/claude-haiku-latest", "anthropic/claude-sonnet-5": "anthropic/claude-sonnet-5", "openrouter/anthropic/claude-sonnet-5": "openrouter/anthropic/claude-sonnet-5", "anthropic/claude-sonnet-5-5": "anthropic/claude-sonnet-5-5", "openrouter/anthropic/claude-sonnet-5.5": "openrouter/anthropic/claude-sonnet-5.5", "deepseek/deepseek-chat": "deepseek/deepseek-chat", "openrouter/deepseek/deepseek-chat": "openrouter/deepseek/deepseek-chat", "openrouter/~deepseek/deepseek-flash-latest": "openrouter/~deepseek/deepseek-flash-latest", "openrouter/deepseek/deepseek-v3.2": "openrouter/deepseek/deepseek-v3.2", "deepseek/deepseek-flash": "deepseek/deepseek-flash", "openrouter/deepseek/deepseek-v4.1-flash": "openrouter/deepseek/deepseek-v4.1-flash", "google/gemini-3.7-flash": "google/gemini-3.7-flash", "openrouter/google/gemini-3.7-flash": "openrouter/google/gemini-3.7-flash", "google/gemini-3.8-flash": "google/gemini-3.8-flash", "openrouter/google/gemini-3.8-flash": "openrouter/google/gemini-3.8-flash", "openai/gpt-6-luna": "openai/gpt-6-luna", "openrouter/openai/gpt-6-luna": "openrouter/openai/gpt-6-luna", "openrouter/openai/gpt-6-luna-pro": "openrouter/openai/gpt-6-luna-pro", "openai/gpt-6-sol": "openai/gpt-6-sol", "openrouter/openai/gpt-6-sol": "openrouter/openai/gpt-6-sol", "openai/gpt-6.1-sol": "openai/gpt-6.1-sol", "openrouter/openai/gpt-6.1-sol": "openrouter/openai/gpt-6.1-sol" });
+  var ModelId = Object.freeze({ "claude-haiku-5-5": "claude-haiku-5-5", "anthropic/claude-haiku-5.5": "anthropic/claude-haiku-5.5", "~anthropic/claude-haiku-latest": "~anthropic/claude-haiku-latest", "claude-sonnet-5": "claude-sonnet-5", "anthropic/claude-sonnet-5": "anthropic/claude-sonnet-5", "claude-sonnet-5-5": "claude-sonnet-5-5", "anthropic/claude-sonnet-5.5": "anthropic/claude-sonnet-5.5", "deepseek-chat": "deepseek-chat", "deepseek/deepseek-chat": "deepseek/deepseek-chat", "~deepseek/deepseek-flash-latest": "~deepseek/deepseek-flash-latest", "deepseek/deepseek-v3.2": "deepseek/deepseek-v3.2", "deepseek-flash": "deepseek-flash", "deepseek/deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash", "gemini-3.7-flash": "gemini-3.7-flash", "google/gemini-3.7-flash": "google/gemini-3.7-flash", "gemini-3.8-flash": "gemini-3.8-flash", "google/gemini-3.8-flash": "google/gemini-3.8-flash", "gpt-6-luna": "gpt-6-luna", "openai/gpt-6-luna": "openai/gpt-6-luna", "openai/gpt-6-luna-pro": "openai/gpt-6-luna-pro", "gpt-6-sol": "gpt-6-sol", "openai/gpt-6-sol": "openai/gpt-6-sol", "gpt-6.1-sol": "gpt-6.1-sol", "openai/gpt-6.1-sol": "openai/gpt-6.1-sol" });
+  var FunctionCallingOfferingId = Object.freeze({ "anthropic/claude-haiku-5-5": "anthropic/claude-haiku-5-5", "openrouter/anthropic/claude-haiku-5.5": "openrouter/anthropic/claude-haiku-5.5", "openrouter/~anthropic/claude-haiku-latest": "openrouter/~anthropic/claude-haiku-latest", "anthropic/claude-sonnet-5": "anthropic/claude-sonnet-5", "openrouter/anthropic/claude-sonnet-5": "openrouter/anthropic/claude-sonnet-5", "anthropic/claude-sonnet-5-5": "anthropic/claude-sonnet-5-5", "openrouter/anthropic/claude-sonnet-5.5": "openrouter/anthropic/claude-sonnet-5.5", "deepseek/deepseek-chat": "deepseek/deepseek-chat", "openrouter/deepseek/deepseek-chat": "openrouter/deepseek/deepseek-chat", "openrouter/~deepseek/deepseek-flash-latest": "openrouter/~deepseek/deepseek-flash-latest", "openrouter/deepseek/deepseek-v3.2": "openrouter/deepseek/deepseek-v3.2", "deepseek/deepseek-flash": "deepseek/deepseek-flash", "openrouter/deepseek/deepseek-v4.1-flash": "openrouter/deepseek/deepseek-v4.1-flash", "google/gemini-3.7-flash": "google/gemini-3.7-flash", "openrouter/google/gemini-3.7-flash": "openrouter/google/gemini-3.7-flash", "google/gemini-3.8-flash": "google/gemini-3.8-flash", "openrouter/google/gemini-3.8-flash": "openrouter/google/gemini-3.8-flash", "openai/gpt-6-luna": "openai/gpt-6-luna", "openrouter/openai/gpt-6-luna": "openrouter/openai/gpt-6-luna", "openrouter/openai/gpt-6-luna-pro": "openrouter/openai/gpt-6-luna-pro", "openai/gpt-6-sol": "openai/gpt-6-sol", "openrouter/openai/gpt-6-sol": "openrouter/openai/gpt-6-sol", "openai/gpt-6.1-sol": "openai/gpt-6.1-sol", "openrouter/openai/gpt-6.1-sol": "openrouter/openai/gpt-6.1-sol" });
+  var StrictJsonSchemaOfferingId = Object.freeze({});
+  var ThinkingOfferingId = Object.freeze({ "anthropic/claude-haiku-5-5": "anthropic/claude-haiku-5-5", "openrouter/anthropic/claude-haiku-5.5": "openrouter/anthropic/claude-haiku-5.5", "openrouter/~anthropic/claude-haiku-latest": "openrouter/~anthropic/claude-haiku-latest", "anthropic/claude-sonnet-5": "anthropic/claude-sonnet-5", "openrouter/anthropic/claude-sonnet-5": "openrouter/anthropic/claude-sonnet-5", "anthropic/claude-sonnet-5-5": "anthropic/claude-sonnet-5-5", "openrouter/anthropic/claude-sonnet-5.5": "openrouter/anthropic/claude-sonnet-5.5", "openrouter/~deepseek/deepseek-flash-latest": "openrouter/~deepseek/deepseek-flash-latest", "openrouter/deepseek/deepseek-v3.2": "openrouter/deepseek/deepseek-v3.2", "deepseek/deepseek-flash": "deepseek/deepseek-flash", "openrouter/deepseek/deepseek-v4.1-flash": "openrouter/deepseek/deepseek-v4.1-flash", "google/gemini-3.7-flash": "google/gemini-3.7-flash", "openrouter/google/gemini-3.7-flash": "openrouter/google/gemini-3.7-flash", "google/gemini-3.8-flash": "google/gemini-3.8-flash", "openrouter/google/gemini-3.8-flash": "openrouter/google/gemini-3.8-flash", "openai/gpt-6-luna": "openai/gpt-6-luna", "openrouter/openai/gpt-6-luna": "openrouter/openai/gpt-6-luna", "openrouter/openai/gpt-6-luna-pro": "openrouter/openai/gpt-6-luna-pro", "openai/gpt-6-sol": "openai/gpt-6-sol", "openrouter/openai/gpt-6-sol": "openrouter/openai/gpt-6-sol", "openai/gpt-6.1-sol": "openai/gpt-6.1-sol", "openrouter/openai/gpt-6.1-sol": "openrouter/openai/gpt-6.1-sol" });
 
   // shared/src/catalog.ts
+  var modelsByProvider = getModelsByProvider();
   function aiConnectionLabel(provider, method) {
     if (method === "chatgpt")
       return "ChatGPT sign-in";
@@ -4174,31 +4332,22 @@ ${refs}` : ""}`;
       return "Claude";
     return PROVIDER_CATALOG[provider]?.label || provider || "";
   }
-  function modelChoices(models) {
+  function modelChoices(models2) {
     return {
-      models: models.map((model) => model.apiModelId),
-      defaultModel: (models.find((model) => model.tier === "flash") || models[0])?.apiModelId
+      models: models2.map((model) => model.apiModelId),
+      defaultModel: (models2.find((model) => model.tier === "flash") || models2[0])?.apiModelId
     };
   }
-  var providers = GENERATED_PROVIDERS.map((provider) => ({
-    id: provider.id,
-    label: provider.label,
-    connection: provider.connection,
-    ...provider.id === "local" ? {} : modelChoices(GENERATED_MODELS.filter((model) => model.providerId === provider.id))
-  }));
-  var routerModels = GENERATED_MODELS.filter((model) => model.providerId === "openrouter");
-  var OPENROUTER_FAMILIES = providers.flatMap((provider) => {
-    if (provider.id === "local" || provider.id === "openrouter")
-      return [];
-    const choices = modelChoices(routerModels.filter((model) => model.modelId.startsWith(provider.id + "/")));
-    return choices.defaultModel ? [{ id: provider.id, label: provider.label, ...choices, defaultModel: choices.defaultModel }] : [];
-  });
-  var routerChoices = modelChoices(routerModels);
-  OPENROUTER_FAMILIES.push({ id: "custom", label: "Custom OpenRouter Model", models: [], defaultModel: routerChoices.defaultModel });
-  var PROVIDER_CATALOG = Object.fromEntries(providers.map((provider) => [
-    provider.id,
-    provider.id === "openrouter" ? { ...provider, families: OPENROUTER_FAMILIES } : provider
-  ]));
+  var providers = [
+    { id: ProviderId.Local, label: "Local", connection: resolveLocalEndpoint({}) },
+    ...Object.values(modelsByProvider).map((models2) => ({
+      id: models2[0].providerId,
+      label: models2[0].provider.name,
+      connection: models2[0].connection,
+      ...modelChoices(models2)
+    }))
+  ];
+  var PROVIDER_CATALOG = Object.fromEntries(providers.map((provider) => [provider.id, provider]));
   function resolveLocalEndpoint(settings) {
     const raw = (settings.chromeAiEndpoint || settings.localEndpoint || settings.aiEndpoint || "http://127.0.0.1:11434/v1").trim();
     const connection = validateClientConfig({
@@ -4226,20 +4375,6 @@ ${refs}` : ""}`;
         next[prefix + "ApiKey"] = "";
     }
     return next;
-  }
-  function findOpenRouterFamily(modelName) {
-    const families = PROVIDER_CATALOG.openrouter.families || [];
-    if (families.length === 0)
-      return void 0;
-    const exact = families.find((f) => f.models.includes(modelName));
-    if (exact)
-      return exact;
-    const byPrefix = families.find((f) => {
-      if (f.id === "custom")
-        return false;
-      return modelName.startsWith(f.id + "/");
-    });
-    return byPrefix || families.find((f) => f.id === "custom");
   }
   function isAIConfigured(settings) {
     if (!settings)
@@ -4283,7 +4418,7 @@ ${refs}` : ""}`;
         apiKey,
         baseURL: connection.baseUrl,
         protocol: connection.protocol,
-        models: GENERATED_MODELS.filter((offering) => offering.providerId === provider && offering.apiModelId === model),
+        models: (modelsByProvider[provider] || []).filter((offering) => offering.apiModelId === model),
         ...provider === "openrouter" ? { defaultHeaders: {
           "HTTP-Referer": "https://github.com/nutegg",
           "X-Title": "NutEgg"
