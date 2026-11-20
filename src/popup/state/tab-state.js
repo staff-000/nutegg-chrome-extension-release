@@ -29,8 +29,10 @@ function popupHasAnalysisContent(result, tab) {
   const sections = tab?.enabledSections || {};
   const chrome = result.mode ? result.mode === 'chrome' : tab?.analysisRetry?.inputs?.chromeMode === true;
   const failed = result.analysisFailures?.length || eggs.some(egg => egg?.analysisFailures?.length);
-  return !!((sections.titleVerdict !== false && text(result.titleVerdict)) ||
-    (sections.coreSummary !== false && (text(result.coreSummary) || Array.isArray(result.coreSummary) && result.coreSummary.some(text))) ||
+  return !!(
+    (sections.titleVerdict !== false && text(result.titleVerdict)) ||
+    (sections.coreSummary !== false &&
+      (text(result.coreSummary) || (Array.isArray(result.coreSummary) && result.coreSummary.some(text)))) ||
     (sections.mindMap !== false && map(result.mindMap)) ||
     entries(result.extractedEntries) || entries(result.newKnowledge) || answers(result.customQuestionAnswers) ||
     (sections.discussion === true && Array.isArray(result.discussion?.topics) && result.discussion.topics.some(topic => text(topic?.title) || text(topic?.summary))) ||
@@ -82,6 +84,7 @@ class TabStateManager {
       sourceVersion: 0,
       debugScope: `${this.#debugSessionId}:${tabId}:${this.#sequence}`,
       debugInfo: null,
+      panelClassification: null,
       playbackPosition: null,
       stage1Version: 0,
       resultRevision: 0,
@@ -105,6 +108,8 @@ class TabStateManager {
       activeEggTab: null,
       customQuestions: '',
       followupDraft: '',
+      userNotes: [],
+      noteDraft: '',
       newEggName: '',
       newEggDescription: '',
       customQuestionsScope: 'within',
@@ -120,6 +125,7 @@ class TabStateManager {
       success: null,
       operations: {},
       completion: null,
+      failure: null,
       currentTabLoading: false,
       presentation: {
         scroll: 0,
@@ -329,6 +335,7 @@ class TabStateManager {
       next.eggHatched = false;
       next.nutCollected = false;
       next.currentNutId = value.nutId ?? next.currentNutId;
+      if (Array.isArray(value?.userNotes)) next.userNotes = popupCopy(value.userNotes);
       if (stage1) {
         next.stage1Version++;
         next.stage1ContentAnalysis = popupCopy(value);
@@ -351,9 +358,13 @@ class TabStateManager {
         next.backgroundJob = popupCopy(job);
         next.backgroundRecoveryPending = job.status === 'completed';
         next.debugScope = job.debugScope || next.debugScope;
-        next.operations.analysis = { ...next.operations.analysis,
-          running: ['waiting', 'running'].includes(job.status), queueState: job.status,
-          phase: job.stage === 2 ? 'stage2' : 'stage1', startedAt: job.createdAt };
+        next.operations.analysis = {
+          ...next.operations.analysis,
+          running: ['waiting', 'running'].includes(job.status),
+          queueState: job.status,
+          phase: job.stage === 2 ? 'stage2' : 'stage1',
+          startedAt: job.createdAt,
+        };
         if (job.status === 'completed' && prev.backgroundJob?.status !== 'completed')
           next.completion = { revision: next.resultRevision + 1, completedAt: job.updatedAt, startedAt: job.createdAt };
         if (job.viewed) next.completion = null;
@@ -366,8 +377,12 @@ class TabStateManager {
         const { payload, context, result: rawResult, signature, progress, ...metadata } = job;
         next.backgroundJob = { ...popupCopy(metadata), detached: true };
         next.analysisCancelled = job.status === 'cancelled';
-        next.analysisRetry = { payload: popupCopy(source), inputs: popupCopy(job.context?.inputs || {}),
-          stage1Request: popupCopy(job.context?.stage1Request), pageGeneration: next.pageGeneration };
+        next.analysisRetry = {
+          payload: popupCopy(source),
+          inputs: popupCopy(job.context?.inputs || {}),
+          stage1Request: popupCopy(job.context?.stage1Request),
+          pageGeneration: next.pageGeneration,
+        };
         next.backgroundRestoredRevision = job.revision;
         if (!['waiting', 'running'].includes(job.status)) next.backgroundAppliedJobId = job.id;
         next.backgroundRecoveryPending = false;
@@ -402,18 +417,74 @@ class TabStateManager {
           next.completion = job.status !== 'completed' || job.viewed ? null : { revision: next.resultRevision, completedAt: job.updatedAt, startedAt: job.createdAt };
           if (job.viewed) next.viewedRevision = next.resultRevision;
           if (job.status === 'completed') delete next.errors.analysis;
-          if (next.currentNutId != null) next.captureHistory = [{
-            ...popupCopy(source), capturePayload: popupCopy(source), result: popupCopy(event.result),
-            nutId: next.currentNutId, saved: job.saved || 'analyzed', capturedAt: new Date(job.updatedAt).toISOString(),
-          }, ...next.captureHistory.filter(entry => entry.nutId !== next.currentNutId)];
+          if (next.currentNutId != null)
+            next.captureHistory = [
+              {
+                ...popupCopy(source),
+                capturePayload: popupCopy(source),
+                result: popupCopy(event.result),
+                nutId: next.currentNutId,
+                saved: job.saved || 'analyzed',
+                capturedAt: new Date(job.updatedAt).toISOString(),
+              },
+              ...next.captureHistory.filter(entry => entry.nutId !== next.currentNutId),
+            ];
         }
         if (job.status === 'cancelled') {
           delete next.errors.analysis;
           if (!event.result && job.stage === 2 && source.contentAnalysis) result(source.contentAnalysis, true);
         } else if (['failed', 'interrupted'].includes(job.status)) {
-          next.errors.analysis = { message: job.errorCode === 'job_interrupted' ? t('jobInterrupted') : job.error || t('jobInterrupted'), code: job.errorCode };
+          next.errors.analysis = {
+            message: job.errorCode === 'job_interrupted' ? t('jobInterrupted') : job.error || t('jobInterrupted'),
+            code: job.errorCode,
+          };
           if (!event.result && job.stage === 2 && source.contentAnalysis) result(source.contentAnalysis, true);
         }
+        break;
+      }
+      case 'panelClassification':
+        if (event.pageGeneration !== prev.pageGeneration) return;
+        next.panelClassification = popupCopy(event.value);
+        break;
+      case 'panelTransferRestored': {
+        if (event.pageGeneration !== prev.pageGeneration || event.snapshot?.url !== prev.url || this.isBusy(tabId))
+          return;
+        for (const key of [
+          'extractedContent',
+          'analysisResult',
+          'stage1Payload',
+          'stage1ContentAnalysis',
+          'currentNutId',
+          'captureHistory',
+          'followUpQa',
+          'selectedEggs',
+          'preSelectedEggs',
+          'customQuestions',
+          'followupDraft',
+          'userNotes',
+          'noteDraft',
+          'customQuestionsScope',
+          'followupScope',
+          'enabledSections',
+          'generateKnowledgeEntries',
+          'optimizeForConversation',
+          'currentView',
+          'presentation',
+          'nutCollected',
+          'eggHatched',
+        ]) {
+          if (
+            ['analysisResult', 'stage1Payload', 'stage1ContentAnalysis', 'currentNutId'].includes(key) &&
+            prev.analysisResult
+          )
+            continue;
+          if (key === 'extractedContent' && prev.extractedContent) continue;
+          if (key in event.snapshot) next[key] = popupCopy(event.snapshot[key]);
+        }
+        next.sourceVersion++;
+        next.stage1Version++;
+        next.resultRevision++;
+        next.intentRevision++;
         break;
       }
       case 'debugInfo':
@@ -433,6 +504,7 @@ class TabStateManager {
         next.success = null;
         if (kind === 'extraction') next.warning = null;
         if (kind === 'analysis') next.completion = null;
+        if (kind === 'analysis') next.failure = null;
         if (kind === 'analysis') next.analysisCancelled = false;
         if (kind === 'analysis') next.emptyAnalysisRefreshRevision = null;
         // An old empty failure must not become this request's partial result.
@@ -446,8 +518,12 @@ class TabStateManager {
         break;
       case 'analysisRetryContext':
         next.analysisStartedHere = true;
-        next.analysisRetry = { payload: popupCopy(event.payload), inputs: popupCopy(event.inputs),
-          stage1Request: popupCopy(event.stage1Request), pageGeneration: next.pageGeneration };
+        next.analysisRetry = {
+          payload: popupCopy(event.payload),
+          inputs: popupCopy(event.inputs),
+          stage1Request: popupCopy(event.stage1Request),
+          pageGeneration: next.pageGeneration,
+        };
         break;
       case 'emptyAnalysisCaptureRequested':
         if (event.pageGeneration !== next.pageGeneration || event.resultRevision !== next.resultRevision ||
@@ -483,6 +559,7 @@ class TabStateManager {
             ...updated,
             titleVerdict: partial.data.titleVerdict,
             coreSummary: partial.data.coreSummary,
+            contentMetadata: popupCopy(partial.data.contentMetadata || existing.contentMetadata),
             customQuestionAnswers: partial.data.customQuestionAnswers || existing.customQuestionAnswers || [],
             ...(partial.data.conversation ? { conversation: popupCopy(partial.data.conversation) } : {}),
           };
@@ -553,6 +630,7 @@ class TabStateManager {
           completedAt: Date.now(),
           startedAt: next.operations[kind].startedAt,
         };
+        next.failure = null;
         break;
       case 'cachedResult':
         next.analysisCancelled = false;
@@ -637,6 +715,12 @@ class TabStateManager {
           h.nutId === next.currentNutId ? { ...h, saved: event.hatch ? 'saved' : 'skip' } : h
         );
         break;
+      case 'notesUpdated':
+        next.userNotes = popupCopy(Array.isArray(event.userNotes) ? event.userNotes : []);
+        if (next.analysisResult) next.analysisResult.userNotes = popupCopy(next.userNotes);
+        if (event.clearDraft) next.noteDraft = '';
+        next.resultRevision++;
+        break;
       case 'questionStarted':
         next.followUpQa.push({
           id: event.id,
@@ -690,7 +774,16 @@ class TabStateManager {
         if (kind === 'analysis' && ['cancelled', 'stale', 'execution_changed'].includes(event.code)) {
           delete next.errors.analysis;
           next.analysisCancelled = true;
-        } else next.errors[kind] = { message: event.error, code: event.code || null };
+          next.failure = null;
+        } else {
+          next.errors[kind] = { message: event.error, code: event.code || null };
+          if (kind === 'analysis') {
+            next.failure = {
+              failedAt: Date.now(),
+              message: event.error || 'Analysis failed',
+            };
+          }
+        }
         if (kind === 'followup')
           next.followUpQa = next.followUpQa.map(q => (q.pending ? { ...q, pending: false, answer: event.error } : q));
         break;
@@ -706,6 +799,8 @@ class TabStateManager {
           'customQuestionsScope',
           'followupScope',
           'followupDraft',
+          'userNotes',
+          'noteDraft',
           'newEggName',
           'newEggDescription',
           'presentation',
@@ -723,6 +818,7 @@ class TabStateManager {
         const targetView = popupHasAnalysisContent(next.analysisResult, next) ? 'results' : 'capture';
         if (targetView === 'results' && next.currentView !== 'results') next.presentation.scroll = 0;
         next.currentView = targetView;
+        next.failure = null;
         break;
       }
       case 'pageInfo':
@@ -785,6 +881,7 @@ class TabStateManager {
     tab.presentation.scroll = 0;
     tab.completion = null;
     tab.followUpQa = [];
+    tab.userNotes = popupCopy(entry.userNotes || entry.result?.userNotes || []);
     tab.currentNutId = entry.result ? entry.nutId : null;
     tab.nutCollected = !!entry.result && ['saved', 'skip'].includes(entry.saved);
     tab.eggHatched = !!entry.result && entry.saved === 'saved';
@@ -825,17 +922,22 @@ class TabStateManager {
   getAnalysisActivity() {
     return [...this.#tabs.values()].flatMap(tab => {
       const job = tab.operations.analysis;
-      if (!job?.running && (!tab.completion || tab.completion.revision <= tab.viewedRevision)) return [];
+      const hasUnread = Boolean(tab.completion && tab.completion.revision > tab.viewedRevision);
+      const hasFailure = Boolean(tab.failure && !job?.running);
+      if (!job?.running && !hasUnread && !hasFailure) return [];
       return [
         {
           tabId: tab.tabId,
-          title: tab.extractedContent?.title || tab.backgroundJob?.title,
+          title: tab.extractedContent?.title || tab.backgroundJob?.title || tab.title,
           url: tab.url,
           running: !!job?.running,
           waiting: !!job?.running && job.queueState === 'waiting',
-          revision: job?.running ? job.requestId : tab.completion.revision,
+          failed: hasFailure,
+          errorMessage: hasFailure ? tab.failure.message : '',
+          revision: job?.running ? job.requestId : hasUnread ? tab.completion.revision : tab.failure.failedAt,
           startedAt: job?.startedAt,
           completedAt: tab.completion?.completedAt,
+          failedAt: tab.failure?.failedAt,
         },
       ];
     });

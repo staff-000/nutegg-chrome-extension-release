@@ -24,11 +24,16 @@ class SettingsState {
     this.enabledSections = { ...DEFAULT_ANALYSIS_SECTIONS };
     this.generateKnowledgeEntries = false;
     this.optimizeForConversation = true;
+    this.userNotesEnabled = true;
     this.debugInfo = false;
     this.captureRetryCount = 3;
     this.captureRetryDelayMs = 3000;
     this.uiDensity = 'compact'; // "compact" | "margin" | "ultra-compact" (also accepts "comfortable" as alias)
     this.chromeCacheTabLimit = 100;
+    this.preferredVideoSpeed = null;
+    this.videoSpeedEnabled = true;
+    this.videoSpeedOnPageEnabled = true;
+    this.videoSpeedAllSitesEnabled = false;
 
     // Obsidian server status
     this.serverOnline = false;
@@ -60,6 +65,7 @@ class SettingsState {
             'outputLanguage',
             'generateKnowledgeEntries',
             'optimizeForConversation',
+            'userNotesEnabled',
             'popupDiagnostics',
             'debugInfo',
             'captureRetryCount',
@@ -70,6 +76,10 @@ class SettingsState {
             'chromeAiProvider',
             'chromeAiModel',
             'obsidianExecutionState',
+            'preferredVideoSpeed',
+            'videoSpeedEnabled',
+            'videoSpeedOnPageEnabled',
+            'videoSpeedAllSitesEnabled',
           ],
           resolve
         );
@@ -92,6 +102,7 @@ class SettingsState {
       }
       this.generateKnowledgeEntries = stored?.generateKnowledgeEntries === true;
       this.optimizeForConversation = stored?.optimizeForConversation !== false;
+      this.userNotesEnabled = stored?.userNotesEnabled !== false;
       this.debugInfo = stored?.debugInfo === true;
       if (
         stored?.uiDensity === 'comfortable' ||
@@ -103,6 +114,17 @@ class SettingsState {
       }
       if (typeof stored?.chromeCacheTabLimit === 'number' && stored.chromeCacheTabLimit >= 0) {
         this.chromeCacheTabLimit = Math.min(1000, Math.round(stored.chromeCacheTabLimit));
+      }
+      this.videoSpeedEnabled = stored?.videoSpeedEnabled !== false;
+      this.videoSpeedOnPageEnabled = stored?.videoSpeedOnPageEnabled !== false;
+      this.videoSpeedAllSitesEnabled = stored?.videoSpeedAllSitesEnabled === true;
+      if (
+        typeof stored?.preferredVideoSpeed === 'number' &&
+        Number.isFinite(stored.preferredVideoSpeed) &&
+        stored.preferredVideoSpeed >= 0.25 &&
+        stored.preferredVideoSpeed <= 16
+      ) {
+        this.preferredVideoSpeed = Math.round(stored.preferredVideoSpeed * 100) / 100;
       }
       this.setCaptureRetries(stored || {});
       if (stored?.enabledSections) {
@@ -147,6 +169,15 @@ class SettingsState {
     this.optimizeForConversation = enabled !== false;
     if (persist && typeof chrome !== 'undefined' && chrome.storage?.local?.set) {
       chrome.storage.local.set({ optimizeForConversation: this.optimizeForConversation });
+    }
+  }
+
+  setPreferredVideoSpeed(rate, persist = true) {
+    const numeric = Number(rate);
+    if (!Number.isFinite(numeric) || numeric < 0.25 || numeric > 16) return;
+    this.preferredVideoSpeed = Math.round(numeric * 100) / 100;
+    if (persist && typeof chrome !== 'undefined' && chrome.storage?.local?.set) {
+      chrome.storage.local.set({ preferredVideoSpeed: this.preferredVideoSpeed });
     }
   }
 

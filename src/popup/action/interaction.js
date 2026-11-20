@@ -51,23 +51,105 @@ class InteractionAction {
     } finally { if (this.seeking === request) { this.seeking = null; this.seekTabId = null; } }
   }
   async updateMindmapPosition() {
-    if (this.positionPending || this.seeking) return null;
+    if (this.positionPending || this.seeking || this.settingPlaybackRate) return null;
     const owner = this.playbackOwner();
     if (!owner || !this.pageExtractor?.getPagePosition) return null;
     const sequence = this.playbackSequence || 0;
     const current = () => owner.options.isCurrent() && (this.playbackSequence || 0) === sequence;
     this.positionPending = true;
     try {
-      const pos = await this.pageExtractor.getPagePosition(owner.tabId, null,
-        { ...owner.options, isCurrent: current, isPageCurrent: owner.options.isCurrent });
-      if (current()) this.store.dispatch({ type: 'playbackPosition', tabId: owner.tabId,
-        pageGeneration: owner.tab.pageGeneration, position: pos });
+      const pos = await this.pageExtractor.getPagePosition(owner.tabId, null, {
+        ...owner.options,
+        preferredRate: this.settings?.preferredVideoSpeed,
+        isCurrent: current,
+        isPageCurrent: owner.options.isCurrent,
+      });
+      if (current() && pos != null) {
+        if (
+          pos.type === 'video' &&
+          Number.isFinite(pos.playbackRate) &&
+          this.settings?.preferredVideoSpeed != null &&
+          Math.abs(pos.playbackRate - this.settings.preferredVideoSpeed) > 0.01
+        ) {
+          this.settings.setPreferredVideoSpeed?.(pos.playbackRate);
+        }
+        this.store.dispatch({
+          type: 'playbackPosition',
+          tabId: owner.tabId,
+          pageGeneration: owner.tab.pageGeneration,
+          position: pos,
+        });
+      }
       return pos;
     } catch {
-      if (current()) this.store.dispatch({ type: 'playbackPosition', tabId: owner.tabId,
-        pageGeneration: owner.tab.pageGeneration, position: null });
       return null;
-    } finally { this.positionPending = false; }
+    } finally {
+      this.positionPending = false;
+    }
+  }
+  async setPlaybackRate(rate) {
+    const numeric = Number(rate);
+    if (!Number.isFinite(numeric) || numeric < 0.25 || numeric > 16) return false;
+    const rounded = Math.round(numeric * 100) / 100;
+    const owner = this.playbackOwner();
+    if (!owner || !this.pageExtractor?.setPlaybackRate) return false;
+    const request = this.playbackSequence = (this.playbackSequence || 0) + 1;
+    this.settingPlaybackRate = request;
+    const current = () => owner.options.isCurrent() && this.playbackSequence === request;
+    try {
+      const pos = await this.pageExtractor.setPlaybackRate(owner.tabId, rounded, {
+        ...owner.options,
+        isCurrent: current,
+        isPageCurrent: owner.options.isCurrent,
+      });
+      if (!current() || pos?.type !== 'video' || !Number.isFinite(pos.playbackRate)) return false;
+      this.settings?.setPreferredVideoSpeed?.(pos.playbackRate);
+      this.store.dispatch({
+        type: 'playbackPosition',
+        tabId: owner.tabId,
+        pageGeneration: owner.tab.pageGeneration,
+        position: pos,
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (this.settingPlaybackRate === request) {
+        this.settingPlaybackRate = null;
+        // Restore the actual player value if the command failed.
+        if (current()) void this.updateMindmapPosition();
+      }
+    }
+  }
+
+  handlePlaybackSpeedShortcut(event) {
+    if (this.settings?.videoSpeedEnabled === false) return;
+    if (event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.composedPath().some(node => node.isContentEditable ||
+        node.matches?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="searchbox"],[role="combobox"],[role="spinbutton"]'))) return;
+    if (!globalThis.NutEggUI?.isVideoView?.(this.store.viewModel())) return;
+    let preset = null;
+    if (event.shiftKey) {
+      const codeMap = { Digit2: 2, Digit3: 3, Digit4: 4, Digit5: 5 };
+      const keyMap = { 2: 2, '@': 2, 3: 3, '#': 3, 4: 4, $: 4, 5: 5, '%': 5 };
+      preset = codeMap[event.code] || keyMap[event.key] || null;
+    }
+    if (preset != null) {
+      event.preventDefault();
+      void this.setPlaybackRate(preset);
+      return;
+    }
+    const delta = ['+', '='].includes(event.key) ? 0.25 : ['-', '_'].includes(event.key) ? -0.25 : 0;
+    if (!delta) return;
+    event.preventDefault();
+    void this.adjustPlaybackRate(delta);
+  }
+  adjustPlaybackRate(delta) {
+    const tab = this.store.getTab(this.store.activeTabId);
+    const current = Number(tab?.playbackPosition?.playbackRate ?? this.settings?.preferredVideoSpeed ?? 1);
+    const base = Number.isFinite(current) && current > 0 ? current : 1;
+    const next = Math.min(16, Math.max(0.25, Math.round((base + delta) * 100) / 100));
+    return this.setPlaybackRate(next);
   }
   toggleDiscussionComments(topicId, stance) {
     const tabId = this.store.activeTabId,

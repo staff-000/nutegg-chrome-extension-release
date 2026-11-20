@@ -135,6 +135,35 @@ class MetricsComponent {
     }
 
     if (view) {
+      const classification = view.panelClassification;
+      if (classification) {
+        const ruleName = classification.ruleId
+          ? classification.name === 'panelStarter'
+            ? t('panelStarter')
+            : classification.name || t('panelDefault')
+          : '';
+        const openState = classification.automatic
+          ? `Auto-opened: Yes${ruleName ? ` (${ruleName})` : ''}`
+          : `Auto-opened: No (manual)${ruleName ? ` · Matched rule: ${ruleName}` : ''}`;
+        lines.push(`🪟 ${openState}`);
+        const details = [
+          classification.ruleId ? t('panelOpenedBy', { rule: ruleName }) : '',
+          classification.author, classification.topic,
+          classification.minutes == null ? t('panelMinutesUnknown') : t('panelMinutes', { count: classification.minutes }),
+          t(classification.contentAvailable ? 'panelContentReady' : 'panelContentMissing'),
+          t(classification.readingProvenance === 'capture' ? 'panelCaptured' : classification.provenance === 'cached' ? 'panelCached' : 'panelLocal'),
+        ].filter(Boolean);
+        lines.push(`🧭 ${details.join(' · ')}`);
+      }
+      const meta = view.analysisResult?.contentMetadata;
+      const tabTopics = meta?.topics?.length
+        ? meta.topics
+        : classification?.topic
+          ? [classification.topic]
+          : [];
+      const tabQuestions = meta?.answerableQuestions?.length ? meta.answerableQuestions : [];
+      lines.push(`🏷️ Topics: ${tabTopics.length ? tabTopics.join(', ') : '—'}`);
+      lines.push(`❓ Questions: ${tabQuestions.length ? tabQuestions.join(' | ') : '—'}`);
       const stParts = [];
       if (view.operations?.analysis?.running) {
         const phase = view.operations.analysis.phase ? ` (${view.operations.analysis.phase})` : '';

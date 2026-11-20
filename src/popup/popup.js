@@ -23,6 +23,7 @@ const ui = Object.fromEntries(
     ['mindmapUI', 'MindmapComponent'],
     ['discussionUI', 'DiscussionComponent'],
     ['qaUI', 'QaComponent'],
+    ['notesUI', 'NotesComponent'],
     ['eggsUI', 'EggsComponent'],
   ].map(([name, type]) => [name, new globalThis.NutEggUI[type]()])
 );
@@ -40,17 +41,38 @@ const presentation = values =>
 const click = (element, fn) => element?.addEventListener('click', fn);
 
 async function initPopup() {
+  try {
+    await globalThis.NutEggPanel?.ready;
+  } catch {
+    document.body.textContent = 'NutEgg: unauthorized panel';
+    return;
+  }
   if (typeof requestAnimationFrame === 'function')
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   globalThis.NutEggI18n?.initI18n();
   globalThis.NutEggI18n?.applyI18n();
+  if (typeof navigator !== 'undefined' && !/mac/i.test(navigator.platform || navigator.userAgent || '')) {
+    document.querySelectorAll('.btn-shortcut').forEach(el => {
+      el.textContent = 'Ctrl↵';
+    });
+  }
   const stored = await settings.loadFromStorage();
+  await globalThis.NutEggPanel?.mount({ manager: tabStateManager });
   tabStateManager.dispatch({ type: 'defaults', defaults: analyzeAction.settingsDefaults() });
   if (stored?.cachedMetrics) tabStateManager.dispatch({ type: 'metrics', value: stored.cachedMetrics });
   tabStateManager.dispatch({ type: 'visibility', visible: document.visibilityState === 'visible' });
   tabStateManager.subscribe(event => renderer.handle(event));
   tabStateManager.subscribe(event => {
-    if (['analysisComplete', 'operationFailed', 'backgroundJobRestored', 'historyLoaded', 'historySelected', 'cachedResult'].includes(event.type))
+    if (
+      [
+        'analysisComplete',
+        'operationFailed',
+        'backgroundJobRestored',
+        'historyLoaded',
+        'historySelected',
+        'cachedResult',
+      ].includes(event.type)
+    )
       void tabAction.refreshEmptyAnalysis(event.tabId);
   });
   tabStateManager.subscribe(event => {
@@ -99,7 +121,7 @@ async function initPopup() {
     onToggle: toggleSection,
     onExpand: key => presentation({ [key]: !tabStateManager.getTab(tabStateManager.activeTabId)?.presentation[key] }),
   });
-  const { actionsUI: a, captureUI: c, qaUI: q, eggsUI: e, headerUI: h } = ui;
+  const { actionsUI: a, captureUI: c, resultsUI: r, qaUI: q, eggsUI: e, headerUI: h } = ui;
   ui.discussionUI.init({ onToggle: (topicId, stance) => interactionAction.toggleDiscussionComments(topicId, stance) });
   for (const prefix of ['discussion-capture', 'discussion-reanalyze']) {
     click(document.getElementById(prefix + '-load'), () => operations.discussion(tabStateManager.activeTabId, true));
@@ -139,6 +161,9 @@ async function initPopup() {
   q.followupInput?.addEventListener('input', () => activeDraft({ followupDraft: q.followupInput.value }));
   q.onScopeChange = scope => activeDraft({ followupScope: scope });
   c.onScopeChange = scope => activeDraft({ customQuestionsScope: scope });
+  c.onSpeedChange = rate => interactionAction.setPlaybackRate(rate);
+  r.onSpeedChange = rate => interactionAction.setPlaybackRate(rate);
+  document.addEventListener('keydown', event => interactionAction.handlePlaybackSpeedShortcut(event));
   click(q.followupBtn, () => interactionAction.handleFollowUp());
   q.followupInput?.addEventListener('keydown', event => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey || event.shiftKey)) {
@@ -156,6 +181,13 @@ async function initPopup() {
       captureEggsExpanded: !tabStateManager.getTab(tabStateManager.activeTabId)?.presentation.captureEggsExpanded,
     })
   );
+  ui.notesUI?.init({
+    onDraftChange: noteDraft => activeDraft({ noteDraft }),
+    onSaveNotes: (userNotes, clearDraft) =>
+      operations.saveNotes(tabStateManager.activeTabId, userNotes, clearDraft),
+    getPlaybackSeconds: () => tabStateManager.getTab(tabStateManager.activeTabId)?.playbackPosition,
+    onSeekTimestamp: time => interactionAction.seekVideoToTime?.(time),
+  });
   click(e.eggsToggle, () => {
     const currentlyExpanded = e.eggsExpanded
       ? !e.eggsExpanded.classList.contains('hidden')
@@ -172,7 +204,12 @@ async function initPopup() {
     input?.addEventListener('input', () => activeDraft({ newEggDescription: input.value }));
   click(e.createEggBtn, () => saveAction.handleCreateEgg(false));
   click(e.eggsCreateBtn, () => saveAction.handleCreateEgg(true));
-  for (const button of [h.statusIndicatorWrap, h.settingsBtn, document.getElementById('setup-open-settings-btn'), document.getElementById('analysis-settings-btn')])
+  for (const button of [
+    h.statusIndicatorWrap,
+    h.settingsBtn,
+    document.getElementById('setup-open-settings-btn'),
+    document.getElementById('analysis-settings-btn'),
+  ])
     click(button, () => {
       chrome.runtime.openOptionsPage();
     });
@@ -255,6 +292,18 @@ async function initPopup() {
       settings.setGenerateKnowledgeEntries(changes.generateKnowledgeEntries.newValue, false);
     if (changes.optimizeForConversation !== undefined)
       settings.setOptimizeForConversation(changes.optimizeForConversation.newValue, false);
+    if (changes.videoSpeedEnabled !== undefined) {
+      settings.videoSpeedEnabled = changes.videoSpeedEnabled.newValue !== false;
+    }
+    if (changes.videoSpeedOnPageEnabled !== undefined) {
+      settings.videoSpeedOnPageEnabled = changes.videoSpeedOnPageEnabled.newValue !== false;
+    }
+    if (changes.videoSpeedAllSitesEnabled !== undefined) {
+      settings.videoSpeedAllSitesEnabled = changes.videoSpeedAllSitesEnabled.newValue === true;
+    }
+    if (changes.preferredVideoSpeed !== undefined && typeof changes.preferredVideoSpeed.newValue === 'number') {
+      settings.setPreferredVideoSpeed(changes.preferredVideoSpeed.newValue, false);
+    }
     if (changes.debugInfo) {
       settings.debugInfo = changes.debugInfo.newValue === true;
       void operations.refreshDebugInfo();
@@ -306,7 +355,8 @@ async function initPopup() {
       void envService.checkServerStatus();
   }, 15000);
   chrome.tabs.onActivated.addListener(info => {
-    if (activityUI.windowId == null || activityUI.windowId === info.windowId) void tabAction.handleTabActivated(info);
+    if (!globalThis.NutEggPanel?.context && (activityUI.windowId == null || activityUI.windowId === info.windowId))
+      void tabAction.handleTabActivated(info);
   });
   chrome.tabs.onUpdated.addListener((id, changes) => tabAction.handleTabUpdated(id, changes));
   chrome.tabs.onRemoved.addListener(id => tabAction.handleTabRemoved(id));
@@ -316,6 +366,7 @@ async function initPopup() {
   globalThis.NutEggStartup?.finish();
   await operations.initializeRecovery();
   await tabAction.refreshForCurrentTab();
+  await globalThis.NutEggPanel?.maybeAutoAnalyze({ manager: tabStateManager, analyzeAction });
 }
 if (typeof module !== 'undefined' && module.exports) module.exports = { initPopup, tabStateManager, renderer };
 else if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPopup);

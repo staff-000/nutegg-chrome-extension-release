@@ -11,7 +11,29 @@
     <main class="options-container">
       <header class="settings-header">
         <div class="brand"><img src="../../icons/icon32.png" alt="" class="logo-icon" /><span>NutEgg</span></div>
-        <span class="mode-badge" id="connection-mode-badge" data-i18n="settingsChromeMode">Works in Chrome</span>
+        <div class="settings-header-actions">
+          <button
+            id="export-config-top-btn"
+            class="secondary-btn"
+            type="button"
+            data-i18n="exportConfigBtn"
+            data-i18n-title="exportConfigTooltip"
+            title="Download settings as a local JSON file"
+          >
+            Export config
+          </button>
+          <button
+            id="reset-config-top-btn"
+            class="secondary-btn"
+            type="button"
+            data-i18n="resetConfigBtn"
+            data-i18n-title="resetConfigTooltip"
+            title="Reset all configuration settings to their default values"
+          >
+            Reset to defaults
+          </button>
+          <span class="mode-badge" id="connection-mode-badge" data-i18n="settingsChromeMode">Works in Chrome</span>
+        </div>
       </header>
       <div class="settings-intro">
         <h1 data-i18n="settingsHeadline">Read less, hatch more, save time</h1>
@@ -211,6 +233,78 @@
         </div>
       </section>
 
+      <section class="ai-assistant-card" id="ai-assistant-card" aria-labelledby="ai-assistant-heading">
+        <div class="ai-assistant-header">
+          <span class="disclosure-icon" aria-hidden="true">✨</span>
+          <div class="summary-copy">
+            <h2 id="ai-assistant-heading" data-i18n="aiAssistantTitle">Customize configuration with AI</h2>
+            <p class="hint" data-i18n="aiAssistantSubtitle">
+              Describe how you want NutEgg to behave in plain words. Only requested settings are changed.
+            </p>
+          </div>
+        </div>
+        <div class="ai-assistant-examples" aria-label="Example prompts">
+          <span class="ai-assistant-examples-label" data-i18n="aiAssistantExamplesLabel">Try:</span>
+          <div class="ai-assistant-chips" data-hints="off">
+            <button
+              type="button"
+              class="ai-assistant-chip"
+              data-ai-example="Use Obsidian mode, and ask the summary prompt to include feedback from Charlie Munger"
+              data-i18n="aiAssistantExample1"
+            >
+              Use Obsidian &amp; include Charlie Munger feedback in summary
+            </button>
+            <button
+              type="button"
+              class="ai-assistant-chip"
+              data-ai-example="Output in Spanish, show Discussion, and use compact mode"
+              data-i18n="aiAssistantExample2"
+            >
+              Output in Spanish &amp; show Discussion
+            </button>
+            <button
+              type="button"
+              class="ai-assistant-chip"
+              data-ai-example="Auto-open arxiv.org, mute x.com, and enable auto-analyze"
+              data-i18n="aiAssistantExample3"
+            >
+              Auto-open arxiv.org, mute x.com &amp; auto-analyze
+            </button>
+            <button
+              type="button"
+              class="ai-assistant-chip"
+              data-ai-example="Turn off Auto-Open and use Chrome panel"
+              data-i18n="aiAssistantExample4"
+            >
+              Turn off Auto-Open &amp; use Chrome panel
+            </button>
+          </div>
+        </div>
+        <textarea
+          id="ai-assistant-input"
+          rows="2"
+          placeholder='e.g. "Use Obsidian mode, include feedback from Charlie Munger in summary, auto-open arxiv.org"'
+          data-i18n-placeholder="aiAssistantPlaceholder"
+          aria-label="Describe the settings you want to change"
+          data-i18n-aria-label="aiAssistantTitle"
+        ></textarea>
+        <div class="ai-assistant-actions" data-hints="off">
+          <button id="ai-assistant-apply-btn" type="button" class="primary-btn" data-i18n="aiAssistantApplyBtn">
+            Apply with AI
+          </button>
+          <button
+            id="ai-assistant-undo-btn"
+            type="button"
+            class="secondary-btn hidden"
+            data-i18n="aiAssistantUndoBtn"
+          >
+            Undo last change
+          </button>
+          <span id="ai-assistant-status" class="hint" role="status" aria-live="polite"></span>
+        </div>
+        <div id="ai-assistant-response" class="ai-assistant-response hidden" role="region" aria-live="polite"></div>
+      </section>
+
       <section class="density-card" id="ui-density-card">
         <div class="density-card-header">
           <span class="disclosure-icon" aria-hidden="true">🎨</span>
@@ -231,7 +325,7 @@
         </div>
       </section>
 
-      <section class="panel-position-card" aria-labelledby="panel-position-title">
+      <section class="panel-position-card" aria-labelledby="panel-position-title" hidden>
         <div class="density-card-header">
           <span class="disclosure-icon" aria-hidden="true">↔</span>
           <div class="summary-copy">
@@ -340,6 +434,48 @@
                 ></span
               ></label
             >
+            <label class="toggle-checkbox-label" for="section-notes"
+              ><input type="checkbox" id="section-notes" checked /><span
+                ><strong
+                  ><span class="label-emoji" aria-hidden="true">📝</span>
+                  <span data-i18n="userNotesSection">Your Notes</span></strong
+                ><small data-i18n="sectionNotesOpt"
+                  >Show the multi-entry personal notes box on Results view (Obsidian mode)</small
+                ></span
+              ></label
+            >
+            <label class="toggle-checkbox-label" for="video-speed-enabled"
+              ><input type="checkbox" id="video-speed-enabled" checked /><span
+                ><strong
+                  ><span class="label-emoji" aria-hidden="true">⏩</span>
+                  <span data-i18n="videoSpeedSettingsTitle">Video Speed Adjuster (0.25x – 16x)</span></strong
+                ><small data-i18n="videoSpeedSettingsDesc"
+                  >Show the playback speed slider in the NutEgg panel and enable + / - keyboard shortcuts</small
+                ></span
+              ></label
+            >
+            <label
+              class="toggle-checkbox-label"
+              for="video-speed-on-page"
+              style="margin-left: 27px; margin-top: -4px"
+              ><input type="checkbox" id="video-speed-on-page" checked /><span
+                ><strong data-i18n="videoSpeedOnPageTitle">Show speed slider on YouTube &amp; Bilibili video players</strong
+                ><small data-i18n="videoSpeedOnPageDesc"
+                  >Display a compact speed pill next to the video title/info bar</small
+                ></span
+              ></label
+            >
+            <label
+              class="toggle-checkbox-label"
+              for="video-speed-all-sites"
+              style="margin-left: 27px; margin-top: -4px"
+              ><input type="checkbox" id="video-speed-all-sites" /><span
+                ><strong data-i18n="videoSpeedAllSitesTitle">Show speed slider on all video websites</strong
+                ><small data-i18n="videoSpeedAllSitesDesc"
+                  >Overlay the speed pill in the top-right corner of videos on any other site</small
+                ></span
+              ></label
+            >
           </fieldset>
           <div class="option-actions">
             <button
@@ -366,7 +502,7 @@
           <span class="disclosure-icon" aria-hidden="true"
             ><img src="../../icons/obsidian-icon.png" alt="" class="obsidian-icon"
           /></span>
-          <label class="summary-copy" for="obsidian-mode-enabled">
+          <div class="summary-copy">
             <strong
               ><span data-i18n="settingsObsidianTitle">Connect Obsidian</span
               ><span class="optional-tag" data-i18n="settingsObsidianOptional">Optional</span></strong
@@ -374,7 +510,8 @@
             <span data-i18n="settingsObsidianDesc"
               >Save to your vault and connect ideas with your existing knowledge.</span
             >
-          </label>
+          </div>
+          <span class="chevron" aria-hidden="true"></span>
         </summary>
         <div class="disclosure-content">
           <p id="connection-mode-status" class="test-result hidden" role="status"></p>
@@ -450,6 +587,9 @@
                 </button>
               </div>
               <select id="ai-prompt-select">
+                <option value="verdictSummary" data-i18n="promptOptSummary">Summary and content metadata</option>
+                <option value="mindMapAnalysis" data-i18n="promptOptMindMap">Mind map</option>
+                <option value="aggregateContent" data-i18n="promptOptAggregate">Combine long-content summaries</option>
                 <option value="contentAnalysis" data-i18n="promptOptContentAnalysis">
                   Content Analysis (Stage 1 Summary &amp; Mind Map)
                 </option>
@@ -457,9 +597,12 @@
                   Default Content Task Instructions
                 </option>
                 <option value="chromeKnowledge" data-i18n="promptOptChromeKnowledge">
-                  Knowledge Extraction (Chrome Mode)
+                  Knowledge Extraction (Default)
                 </option>
                 <option value="followUp" data-i18n="promptOptFollowUp">Follow-up Q&amp;A</option>
+                <option value="discussionAnalysis" data-i18n="promptOptDiscussion">Discussion Analysis</option>
+                <option value="aggregateDiscussion" data-i18n="promptOptAggregateDiscussion">Combine Discussion Batches</option>
+                <option value="conversationRules" data-i18n="promptOptConversationRules">Conversation &amp; Podcast Rules</option>
               </select>
               <textarea
                 id="ai-prompt-textarea"
@@ -468,6 +611,8 @@
                 aria-label="Custom prompts"
                 data-i18n-aria-label="settingsPromptsLabel"
               ></textarea>
+              <button id="ai-prompt-save-btn" type="button" class="secondary-btn" data-i18n="saveBtn" data-hints="off">Save</button>
+              <span id="ai-prompt-save-status" role="status" aria-live="polite"></span>
               <p class="hint" data-i18n="settingsPromptsHint">
                 Adjust how your Chrome AI responds. Leave the defaults for the standard NutEgg experience.
               </p>
@@ -577,7 +722,27 @@
         </div>
       </details>
       <footer class="settings-footer">
-        <a href="#" id="shortcuts-link" data-i18n="keyboardShortcutSection">Keyboard Shortcut</a
+        <button
+          id="export-config-bottom-btn"
+          class="text-btn"
+          type="button"
+          data-i18n="exportConfigBtn"
+          data-i18n-title="exportConfigTooltip"
+          title="Download settings as a local JSON file"
+        >
+          Export config</button
+        ><span aria-hidden="true">·</span
+        ><button
+          id="reset-config-bottom-btn"
+          class="text-btn"
+          type="button"
+          data-i18n="resetConfigBtn"
+          data-i18n-title="resetConfigTooltip"
+          title="Reset all configuration settings to their default values"
+        >
+          Reset to defaults</button
+        ><span aria-hidden="true">·</span
+        ><a href="#" id="shortcuts-link" data-i18n="keyboardShortcutSection">Keyboard Shortcut</a
         ><span aria-hidden="true">·</span
         ><button
           id="report-bug-btn"
@@ -604,5 +769,7 @@
     <script src="../popup/state/settings-state.js"></script>
     <script src="options.js"></script>
     <script src="../tooltips.js"></script>
+    <script defer src="../panel/rules.js"></script>
+    <script defer src="../panel/options.js"></script>
   </body>
 </html>

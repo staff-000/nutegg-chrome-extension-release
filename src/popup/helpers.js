@@ -169,28 +169,33 @@ function formatPublishedDate(raw) {
   return String(raw);
 }
 
+const SITE_CATALOG = Object.freeze([
+  { id: 'youtube', label: '📺 YouTube', domains: ['youtube.com', 'youtu.be'], isVideo: true, hasOnPageSpeed: true },
+  { id: 'bilibili', label: '📺 Bilibili', domains: ['bilibili.com'], isVideo: true, hasOnPageSpeed: true },
+  { id: 'douyin', label: '📺 Douyin', domains: ['douyin.com'], isVideo: true },
+  { id: 'tiktok', label: '📺 TikTok', domains: ['tiktok.com'], isVideo: true },
+  { id: 'twitter', label: '🐦 Twitter/X', domains: ['twitter.com', 'x.com'] },
+  { id: 'weibo', label: '📝 Weibo', domains: ['weibo.com', 'weibo.cn'] },
+  { id: 'zhihu', label: '📝 Zhihu', domains: ['zhihu.com'] },
+  { id: 'instagram', label: '📸 Instagram', domains: ['instagram.com'] },
+  { id: 'threads', label: '🧵 Threads', domains: ['threads.com', 'threads.net'] },
+]);
+
+function matchSiteFromUrl(url) {
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return SITE_CATALOG.find(site => site.domains.some(d => host === d || host.endsWith(`.${d}`))) || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Classify supported platform URLs; fall back to "webpage".
  */
 function detectPageTypeFromUrl(url) {
-  if (!url) return 'webpage';
-  try {
-    const host = new URL(url).hostname;
-    const belongs = domain => host === domain || host.endsWith(`.${domain}`);
-    if (belongs('youtube.com') || belongs('youtu.be')) return 'youtube';
-    for (const [domain, type] of [
-      ['bilibili.com', 'bilibili'],
-      ['douyin.com', 'douyin'],
-      ['weibo.com', 'weibo'],
-      ['weibo.cn', 'weibo'],
-      ['zhihu.com', 'zhihu'],
-    ]) {
-      if (host === domain || host.endsWith(`.${domain}`)) return type;
-    }
-    if (belongs('tiktok.com')) return 'tiktok';
-    if (belongs('twitter.com') || belongs('x.com')) return 'twitter';
-  } catch {}
-  return 'webpage';
+  return matchSiteFromUrl(url)?.id || 'webpage';
 }
 
 /**
@@ -225,7 +230,7 @@ function countCapturedWords(capture) {
 function isContentSuspiciouslyLow(wordCount, sourceType = 'webpage') {
   if (typeof wordCount !== 'number' || wordCount < 0) return false;
   const type = String(sourceType || '').toLowerCase();
-  if (type === 'twitter' || type === 'weibo') {
+  if (['twitter', 'weibo', 'threads', 'instagram'].includes(type)) {
     // Single tweets can be concise, but fewer than 5 words is suspicious
     return wordCount < 5;
   }
@@ -488,6 +493,8 @@ const NutEggHelpers = {
   unwrapMindMapRoots,
   buildPriorQa,
   formatPublishedDate,
+  SITE_CATALOG,
+  matchSiteFromUrl,
   detectPageTypeFromUrl,
   provenanceFromExtraction,
   countWords,

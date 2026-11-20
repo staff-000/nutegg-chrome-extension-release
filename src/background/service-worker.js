@@ -7,7 +7,9 @@ importScripts(
   '../content/extractors/youtube.js',
   'execution-session.js',
   'analysis-job-store.js',
-  'analysis-jobs.js'
+  'analysis-jobs.js',
+  '../panel/rules.js',
+  '../panel/background.js'
 );
 
 const { PROVIDER_CATALOG, isSubscriptionProvider, checkCreditAI, analyzeContentStandalone, askFollowUpStandalone } =
@@ -22,9 +24,9 @@ async function init() {
   const stored = await chrome.storage.local.get(['serverPort']);
   if (stored.serverPort) serverPort = stored.serverPort;
 
-  // Side panel only — clicking the extension icon opens the panel directly
+  // The panel broker routes toolbar clicks to the selected UI.
   chrome.action.setPopup({ popup: '' });
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {}); // OK if sidePanel API not available
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {}); // OK if sidePanel API not available
   console.log('[NutEgg] Port:', serverPort);
 }
 
@@ -208,6 +210,10 @@ chrome.storage.onChanged?.addListener((changes, area) => {
       void NutEggExecution.ensure().catch(() => {});
     }
   }
+  const speedKeys = ['videoSpeedEnabled', 'videoSpeedOnPageEnabled', 'videoSpeedAllSitesEnabled', 'preferredVideoSpeed'];
+  if (speedKeys.some(key => key in changes)) {
+    void broadcastVideoSpeedSettings();
+  }
   const configKeys = [
     'chromeAiProvider',
     'chromeAiApiKey',
@@ -383,9 +389,11 @@ chrome.tabs?.onAttached?.addListener((tabId, info) => {
   void analysisJobsInstance?.move(tabId, info.newWindowId).catch(() => {});
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+function handleTrustedMessage(message, _sender, sendResponse) {
   if (message.action === 'youtube-player-snapshot')
     return handleYouTubePlayerSnapshotMessage(message, _sender, sendResponse);
+  if (message.action === 'get-video-speed-settings' || message.action === 'set-preferred-video-speed')
+    return handleContentScriptSpeedMessage(message, _sender, sendResponse);
   if (_sender?.id !== chrome.runtime.id || (_sender?.url && !_sender.url.startsWith(chrome.runtime.getURL('/')))) {
     sendResponse({ error: 'Privileged extension page required.', errorCode: 'forbidden' });
     return false;
@@ -550,6 +558,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'save-user-notes') {
+    handleSaveUserNotes(message.payload)
+      .then(r => sendResponse(r))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (message.action === 'ask') {
     handleAsk(message.payload)
       .then(r => sendResponse(r))
@@ -703,6 +718,99 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch(() => sendResponse({ nuts: 0, eggs: 0, timeSaved: '0m' }));
     return true;
   }
+
+  if (message.action === 'ai-configure-settings') {
+    handleAiConfigureSettings(message.request)
+      .then(r => sendResponse(r))
+      .catch(err => sendResponse({ error: err?.message || 'Failed to configure settings with AI' }));
+    return true;
+  }
+
+  if (message.action === 'ai-undo-settings') {
+    handleAiUndoSettings(message.undoPatch)
+      .then(r => sendResponse(r))
+      .catch(err => sendResponse({ error: err?.message || 'Failed to undo settings' }));
+    return true;
+  }
+}
+
+async function readVideoSpeedSettings() {
+  const stored = await chrome.storage.local
+    .get(['videoSpeedEnabled', 'videoSpeedOnPageEnabled', 'videoSpeedAllSitesEnabled', 'preferredVideoSpeed'])
+    .catch(() => ({}));
+  return {
+    videoSpeedEnabled: stored?.videoSpeedEnabled !== false,
+    videoSpeedOnPageEnabled: stored?.videoSpeedOnPageEnabled !== false,
+    videoSpeedAllSitesEnabled: stored?.videoSpeedAllSitesEnabled === true,
+    preferredVideoSpeed:
+      typeof stored?.preferredVideoSpeed === 'number' &&
+      Number.isFinite(stored.preferredVideoSpeed) &&
+      stored.preferredVideoSpeed >= 0.25 &&
+      stored.preferredVideoSpeed <= 16
+        ? Math.round(stored.preferredVideoSpeed * 100) / 100
+        : null,
+  };
+}
+
+async function broadcastVideoSpeedSettings() {
+  try {
+    const settings = await readVideoSpeedSettings();
+    chrome.tabs?.query?.({}, tabs => {
+      if (!Array.isArray(tabs)) return;
+      for (const tab of tabs) {
+        if (tab?.id != null) {
+          chrome.tabs.sendMessage(tab.id, { action: 'nutegg-speed-settings-updated', settings }).catch(() => {});
+        }
+      }
+    });
+  } catch {}
+}
+
+function handleContentScriptSpeedMessage(message, sender, sendResponse) {
+  if (sender?.id !== chrome.runtime.id) {
+    sendResponse({ error: 'Forbidden' });
+    return false;
+  }
+  if (message.action === 'get-video-speed-settings') {
+    readVideoSpeedSettings()
+      .then(settings => sendResponse({ settings }))
+      .catch(() => sendResponse({ settings: { videoSpeedEnabled: true, videoSpeedOnPageEnabled: true, preferredVideoSpeed: null } }));
+    return true;
+  }
+  if (message.action === 'set-preferred-video-speed') {
+    const numeric = Number(message.rate);
+    if (!Number.isFinite(numeric) || numeric < 0.25 || numeric > 16) {
+      sendResponse({ success: false, error: 'Invalid rate' });
+      return false;
+    }
+    const rounded = Math.round(numeric * 100) / 100;
+    chrome.storage.local
+      .set({ preferredVideoSpeed: rounded })
+      .then(() => sendResponse({ success: true, preferredVideoSpeed: rounded }))
+      .catch(() => sendResponse({ success: false }));
+    return true;
+  }
+  return false;
+}
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message.action?.startsWith('panel-')) return;
+  if (message.action === 'youtube-player-snapshot') return handleYouTubePlayerSnapshotMessage(message, sender, respond);
+  if (message.action === 'get-video-speed-settings' || message.action === 'set-preferred-video-speed') {
+    return handleContentScriptSpeedMessage(message, sender, respond);
+  }
+  const checkAuth =
+    typeof NutEggPanels !== 'undefined'
+      ? NutEggPanels.authorized(sender)
+      : Promise.resolve(
+          sender?.id === chrome.runtime.id && (!sender?.url || sender.url.startsWith(chrome.runtime.getURL('/')))
+        );
+  checkAuth
+    .then(allowed => {
+      if (!allowed) return respond({ error: 'Privileged extension page required.', errorCode: 'forbidden' });
+      handleTrustedMessage(message, sender, respond);
+    })
+    .catch(error => respond({ error: error.message }));
+  return true;
 });
 
 // --- Background-owned analysis jobs ---
@@ -716,7 +824,7 @@ async function getAnalysisConfiguration() {
   return {
     mode, cacheGeneration: chromeCacheGeneration, revision: mode === 'obsidian' ? `${execution.instanceId}:${execution.revision}:${saved.chromeApiRevision || 'initial'}` : saved.chromeApiRevision || 'initial',
     serverPort: mode === 'obsidian' ? saved.serverPort || DEFAULT_PORT : null,
-    cacheAllowed: mode !== 'chrome' || await getChromeCacheLimit() > 0,
+    cacheAllowed: mode !== 'chrome' || (await getChromeCacheLimit()) > 0,
   };
 }
 function analysisJobs() {
@@ -735,7 +843,13 @@ chrome.runtime.onConnect.addListener(port => {
   if (port.sender?.id !== chrome.runtime.id || !port.sender?.url?.startsWith(chrome.runtime.getURL('/'))) {
     port.disconnect(); return;
   }
-  analysisJobs().attach(port);
+  analysisJobs().attach(port, message =>
+    typeof NutEggPanels !== 'undefined'
+      ? NutEggPanels.authorized(port.sender).then(
+          allowed => allowed && (!port.sender.tab || message.tabId == null || message.tabId === port.sender.tab.id)
+        )
+      : true
+  );
 });
 // --- Server communication ---
 
@@ -1002,47 +1116,29 @@ function extractVideoIdentity(rawUrl, metadata = null) {
       if (vid) return vid;
     } catch {}
   }
-  if (!rawUrl || typeof rawUrl !== 'string') return null;
-  try {
-    const u = new URL(rawUrl);
-    const host = u.hostname.toLowerCase();
-    const segments = u.pathname.split('/').filter(Boolean);
-
-    // YouTube
-    const youtubeHosts = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'];
-    let ytId = null;
-    if (youtubeHosts.includes(host)) {
-      if (segments[0] === 'watch') ytId = u.searchParams.get('v');
-      else if (['shorts', 'live', 'embed', 'v'].includes(segments[0])) ytId = segments[1];
-    } else if (host === 'youtu.be' || host === 'www.youtu.be') {
-      ytId = segments[0];
-    } else if (['youtube-nocookie.com', 'www.youtube-nocookie.com'].includes(host) && segments[0] === 'embed') {
-      ytId = segments[1];
+  if (rawUrl && typeof rawUrl === 'string') {
+    const key = NutEggPageIdentity?.playbackPageKey?.(rawUrl);
+    if (key) {
+      const ytMatch = key.match(/^https:\/\/www\.youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})$/);
+      if (ytMatch) return { platform: 'youtube', id: ytMatch[1], canonicalUrl: key };
+      const biliMatch = key.match(/^https:\/\/www\.bilibili\.com\/video\/(BV[A-Za-z0-9]{10})(?:\?p=\d+)?$/);
+      if (biliMatch) return { platform: 'bilibili', id: biliMatch[1], canonicalUrl: key };
     }
-    if (ytId && /^[A-Za-z0-9_-]{11}$/.test(ytId)) {
-      return { platform: 'youtube', id: ytId, canonicalUrl: `https://www.youtube.com/watch?v=${ytId}` };
-    }
-
-    // Bilibili
-    const bilibiliHosts = ['bilibili.com', 'www.bilibili.com', 'm.bilibili.com', 'player.bilibili.com'];
-    if (bilibiliHosts.some(h => host === h || host.endsWith('.' + h))) {
-      let bvid = segments[0] === 'video' ? segments[1] : u.searchParams.get('bvid');
-      if (!bvid && u.searchParams.get('aid')) bvid = `av${u.searchParams.get('aid')}`;
-      if (!bvid && segments[0] === 'video' && /^av\d+$/i.test(segments[1])) bvid = segments[1];
-      if (bvid) {
-        const cleanBvid = bvid.split('?')[0].split('/')[0];
-        const part = Number(
-          u.searchParams.get('p') || (host === 'player.bilibili.com' ? u.searchParams.get('page') : null) || 1
-        );
-        const partSuffix = Number.isSafeInteger(part) && part > 1 ? `?p=${part}` : '';
-        return {
-          platform: 'bilibili',
-          id: cleanBvid,
-          canonicalUrl: `https://www.bilibili.com/video/${cleanBvid}${partSuffix}`,
-        };
+    // Legacy Bilibili av-ID fallback
+    try {
+      const u = new URL(rawUrl);
+      const host = u.hostname.toLowerCase();
+      if (['bilibili.com', 'www.bilibili.com', 'm.bilibili.com', 'player.bilibili.com'].some(h => host === h || host.endsWith('.' + h))) {
+        const seg1 = u.pathname.split('/').filter(Boolean)[1];
+        const aid = u.searchParams.get('aid') ? `av${u.searchParams.get('aid')}` : /^av\d+$/i.test(seg1 || '') ? seg1 : null;
+        if (aid) {
+          const part = Number(u.searchParams.get('p') || (host === 'player.bilibili.com' ? u.searchParams.get('page') : null) || 1);
+          const partSuffix = Number.isSafeInteger(part) && part > 1 ? `?p=${part}` : '';
+          return { platform: 'bilibili', id: aid, canonicalUrl: `https://www.bilibili.com/video/${aid}${partSuffix}` };
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   if (metadata?.video_id && (metadata.platform === 'youtube' || metadata.platform === 'bilibili')) {
     const id = metadata.video_id;
@@ -1068,47 +1164,12 @@ function normalizeCacheUrl(rawUrl, metadata = null) {
       return NutEggAI.normalizeContentUrl(rawUrl);
     } catch {}
   }
-
-  try {
-    const u = new URL(rawUrl);
-    if (!NutEggPageIdentity.isApplicationHash(u.hash)) u.hash = '';
-    const twitterHosts = ['twitter.com', 'www.twitter.com', 'mobile.twitter.com', 'x.com', 'www.x.com'];
-    if (twitterHosts.includes(u.hostname.toLowerCase())) {
-      u.hostname = 'x.com';
-      if (/\/status\/\d+/.test(u.pathname)) {
-        u.search = '';
-        return u.toString().replace(/\/$/, '');
-      }
-    }
-    const trackingParams = [
-      'utm_source',
-      'utm_medium',
-      'utm_campaign',
-      'utm_content',
-      'utm_term',
-      'ref',
-      'source',
-      'fbclid',
-      'gclid',
-      'si',
-      'pp',
-      'feature',
-      'spm',
-      'vd_source',
-      'spm_id_from',
-    ];
-    for (const param of trackingParams) {
-      u.searchParams.delete(param);
-    }
-    u.searchParams.sort();
-    let pathname = u.pathname;
-    if (pathname.length > 1 && pathname.endsWith('/')) {
-      u.pathname = pathname.slice(0, -1);
-    }
-    return u.toString().replace(/\/$/, '');
-  } catch {
-    return rawUrl.split('#')[0].replace(/\/+$/, '');
+  if (typeof NutEggPageIdentity !== 'undefined' && typeof NutEggPageIdentity.capturePageKey === 'function') {
+    try {
+      return NutEggPageIdentity.capturePageKey(rawUrl);
+    } catch {}
   }
+  return rawUrl.split('#')[0].replace(/\/+$/, '');
 }
 
 function matchesCacheEntry(entry, targetUrl) {
@@ -1717,6 +1778,131 @@ async function checkServer() {
     }
     return { online: false };
   }
+}
+
+async function handleSaveUserNotes(payload) {
+  if ((await getConnectionMode()) !== 'obsidian') return { success: false, mode: 'chrome' };
+  const serverUrl = await getServerUrl();
+  const response = await serverFetch(`${serverUrl}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+    signal: AbortSignal.timeout(5000),
+  });
+  return response.json().catch(() => ({ success: false }));
+}
+
+async function handleAiConfigureSettings(userRequest) {
+  const query = String(userRequest || '').trim();
+  if (!query) return { preflightError: true, reasonCode: 'empty_request' };
+
+  const mode = await getConnectionMode();
+  const aiSettings = await loadChromeAiSettings();
+  let useObsidianAsk = false;
+
+  if (mode === 'obsidian') {
+    const server = await checkServer();
+    if (!server.online) {
+      return { preflightError: true, reasonCode: 'obsidian_offline' };
+    }
+    const execMode = NutEggExecution.state?.mode || 'apiKey';
+    if (execMode === 'apiKey') {
+      if (!NutEggAI.isAIConfigured(aiSettings)) {
+        return { preflightError: true, reasonCode: 'no_api_key' };
+      }
+    } else if (execMode === 'subscription') {
+      if (!NutEggExecution.state?.subscriptionAvailable) {
+        return { preflightError: true, reasonCode: 'subscription_not_ready' };
+      }
+      useObsidianAsk = true;
+    } else if (execMode === 'chatgpt') {
+      if (!NutEggExecution.state?.chatgpt?.signedIn) {
+        return { preflightError: true, reasonCode: 'chatgpt_not_signed_in' };
+      }
+      useObsidianAsk = true;
+    }
+  } else if (!NutEggAI.isAIConfigured(aiSettings)) {
+    return { preflightError: true, reasonCode: 'no_api_key' };
+  }
+
+  const stored = await chrome.storage.local.get([
+    'connectionMode',
+    'serverPort',
+    'analysisMode',
+    'chromeAiProvider',
+    'chromeAiModel',
+    'uiDensity',
+    'outputLanguage',
+    'enabledSections',
+    'generateKnowledgeEntries',
+    'optimizeForConversation',
+    'chunkWindowChars',
+    'contentAnalysisMaxTokens',
+    'chromeCacheTabLimit',
+    'captureRetryCount',
+    'captureRetryDelayMs',
+    'debugInfo',
+    'chromeAiPromptOverrides',
+    'panelSettings',
+  ]);
+  const snapshot = {
+    ...stored,
+    connectionMode: mode,
+    serverPort: stored.serverPort || DEFAULT_PORT,
+    chromeAiProvider: aiSettings.chromeAiProvider,
+    chromeAiModel: aiSettings.chromeAiModel,
+    outputLanguage: aiSettings.outputLanguage,
+    chunkWindowChars: aiSettings.chunkWindowChars,
+    contentAnalysisMaxTokens: aiSettings.contentAnalysisMaxTokens,
+    panelSettings: typeof NutEggRules !== 'undefined' ? NutEggRules.normalize(stored.panelSettings) : stored.panelSettings,
+  };
+
+  const prompt = NutEggAI.buildSettingsAssistantPrompt(snapshot, query);
+  let rawResponse = '';
+  if (useObsidianAsk) {
+    const askRes = await handleAsk({
+      url: 'nutegg://settings',
+      title: 'NutEgg Settings Assistant',
+      content: 'NutEgg Settings Configuration Assistant',
+      questions: [prompt],
+      scope: 'beyond',
+    });
+    if (askRes?.error) {
+      return { error: askRes.error, errorCode: askRes.errorCode || 'unknown' };
+    }
+    rawResponse = askRes?.answers?.[0]?.answer || '';
+  } else {
+    const config = NutEggAI.resolveConfig(aiSettings);
+    rawResponse = await NutEggAI.chatAI(prompt, 2500, config, 'ai-settings-assistant');
+  }
+
+  const plan = NutEggAI.validateAndApplySettingsPlan(rawResponse, snapshot);
+  const patch = { ...plan.nextStoragePatch };
+  if (Object.keys(patch).length > 0) {
+    if (patch.panelSettings && typeof NutEggRules !== 'undefined') {
+      patch.panelSettings = NutEggRules.normalize(patch.panelSettings);
+    }
+    if (patch.serverPort) serverPort = patch.serverPort;
+    if (patch.chromeAiProvider || patch.chromeAiModel) {
+      patch.chromeApiRevision = crypto.randomUUID();
+    }
+    await chrome.storage.local.set(patch);
+  }
+  return plan;
+}
+
+async function handleAiUndoSettings(undoPatch) {
+  if (!undoPatch || typeof undoPatch !== 'object') return { ok: false };
+  const toSet = {};
+  const toRemove = [];
+  for (const [k, v] of Object.entries(undoPatch)) {
+    if (v === undefined) toRemove.push(k);
+    else toSet[k] = v;
+  }
+  if (toSet.serverPort) serverPort = toSet.serverPort;
+  if (Object.keys(toSet).length > 0) await chrome.storage.local.set(toSet);
+  if (toRemove.length > 0) await chrome.storage.local.remove(toRemove);
+  return { ok: true };
 }
 
 console.log('[NutEgg] Background service worker started');

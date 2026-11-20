@@ -118,8 +118,8 @@
               data-i18n-title="settingsTooltip"
             >
               <svg
-                width="16"
-                height="16"
+                width="13"
+                height="13"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -221,6 +221,32 @@
             <span id="page-published"></span>
             <span id="page-word-count"></span>
             <span id="page-caption-source" class="caption-source-tag hidden"></span>
+            <span id="capture-video-speed" class="video-speed-control hidden">
+              <button
+                type="button"
+                id="capture-video-speed-reset"
+                class="video-speed-badge"
+                title="Reset speed to 1x"
+                data-i18n-title="videoSpeedResetHint"
+                aria-label="Reset speed to 1x"
+                data-i18n-aria-label="videoSpeedResetHint"
+              >
+                ⏩ <span id="capture-video-speed-text">1x</span>
+              </button>
+              <input
+                type="range"
+                id="capture-video-speed-slider"
+                class="video-speed-slider"
+                min="0"
+                max="27"
+                step="1"
+                value="3"
+                title="Adjust speed · + / - (±0.25x) · Shift+2..5 (2x–5x)"
+                data-i18n-title="videoSpeedSliderHint"
+                aria-label="Video playback speed"
+                data-i18n-aria-label="videoSpeedLabel"
+              />
+            </span>
           </div>
         </div>
         <div class="content-fetch-box">
@@ -500,6 +526,32 @@
             <span id="result-page-author"></span>
             <span id="result-page-published"></span>
             <span id="result-page-word-count"></span>
+            <span id="result-video-speed" class="video-speed-control hidden">
+              <button
+                type="button"
+                id="result-video-speed-reset"
+                class="video-speed-badge"
+                title="Reset speed to 1x"
+                data-i18n-title="videoSpeedResetHint"
+                aria-label="Reset speed to 1x"
+                data-i18n-aria-label="videoSpeedResetHint"
+              >
+                ⏩ <span id="result-video-speed-text">1x</span>
+              </button>
+              <input
+                type="range"
+                id="result-video-speed-slider"
+                class="video-speed-slider"
+                min="0"
+                max="27"
+                step="1"
+                value="3"
+                title="Adjust speed · + / - (±0.25x) · Shift+2..5 (2x–5x)"
+                data-i18n-title="videoSpeedSliderHint"
+                aria-label="Video playback speed"
+                data-i18n-aria-label="videoSpeedLabel"
+              />
+            </span>
             <select
               id="history-select"
               class="history-select hidden"
@@ -713,8 +765,59 @@
                   <option value="within" data-i18n="scopeWithin">Content only</option>
                   <option value="beyond" data-i18n="readerScopeBeyond">Global knowledge</option>
                 </select>
-                <button id="followup-btn" class="followup-btn" data-i18n="askBtn" data-hints="off">Ask</button>
+                <button id="followup-btn" class="followup-btn" data-hints="off">
+                  <span data-i18n="askBtn">Ask</span>
+                  <kbd class="btn-shortcut" aria-hidden="true">⌘↵</kbd>
+                </button>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="user-notes-section" data-obsidian-only class="result-section hidden">
+          <div class="section-header">
+            <div class="section-label">
+              <span data-i18n="userNotesSection">📝 Your Notes</span>
+              <span id="user-notes-count" class="section-hint"></span>
+            </div>
+            <div class="user-notes-header-actions">
+              <button
+                type="button"
+                id="user-notes-copy-all"
+                class="user-note-icon-btn hidden"
+                title="Copy all notes"
+                data-i18n-title="copyAllNotes"
+              >
+                📋
+              </button>
+              <span class="section-chevron" aria-hidden="true"
+                ><svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="6 9 12 15 18 9"></polyline></svg
+              ></span>
+            </div>
+          </div>
+          <div class="section-content">
+            <div id="user-notes-list" class="user-notes-list"></div>
+            <div class="user-notes-input-row">
+              <textarea
+                id="user-note-input"
+                rows="1"
+                data-i18n-placeholder="userNotesPlaceholder"
+                placeholder="Write a note… (⌘/Ctrl+Enter to add)"
+              ></textarea>
+              <button id="user-note-add-btn" type="button" class="followup-btn" data-hints="off">
+                <span data-i18n="addNoteBtn">Add</span>
+                <kbd class="btn-shortcut" aria-hidden="true">⌘↵</kbd>
+              </button>
             </div>
           </div>
         </div>
@@ -1139,10 +1242,12 @@
     <script defer src="services/popup-operations.js"></script>
     <script defer src="ui/mindmap.js"></script>
     <script defer src="ui/qa.js"></script>
+    <script defer src="ui/notes.js"></script>
     <script defer src="ui/eggs.js"></script>
     <script defer src="ui/header.js"></script>
     <script defer src="ui/analysis-activity.js"></script>
     <script defer src="ui/banners.js"></script>
+    <script defer src="../content/video-speed-shared.js"></script>
     <script defer src="ui/capture-view.js"></script>
     <script defer src="ui/section-chips.js"></script>
     <script defer src="ui/verdict.js"></script>
@@ -1156,6 +1261,8 @@
     <script defer src="action/save.js"></script>
     <script defer src="action/history.js"></script>
     <script defer src="action/interaction.js"></script>
+    <script defer src="../panel/rules.js"></script>
+    <script defer src="../panel/panel-bridge.js"></script>
     <script defer src="popup.js"></script>
   </body>
 </html>

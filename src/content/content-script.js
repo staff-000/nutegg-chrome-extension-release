@@ -10,15 +10,53 @@
  * @property {'continue'|'stop'} onError Whether ordinary failures may fall through. Ownership/cancellation always stop.
  */
 var BUILTIN_EXTRACTORS = [
-  { name: 'youtube', detect: window.detectYouTube, extract: window.extractYouTube, bodyReadiness: false, onError: 'continue' },
-  { name: 'twitter', detect: window.detectTwitter, extract: window.extractTwitter, bodyReadiness: false, onError: 'continue' },
-  { name: 'bilibili', detect: window.detectBilibili, extract: window.extractBilibili, bodyReadiness: false, onError: 'stop' },
+  {
+    name: 'youtube',
+    detect: window.detectYouTube,
+    extract: window.extractYouTube,
+    bodyReadiness: false,
+    onError: 'continue',
+  },
+  {
+    name: 'twitter',
+    detect: window.detectTwitter,
+    extract: window.extractTwitter,
+    bodyReadiness: false,
+    onError: 'continue',
+  },
+  {
+    name: 'bilibili',
+    detect: window.detectBilibili,
+    extract: window.extractBilibili,
+    bodyReadiness: false,
+    onError: 'stop',
+  },
   { name: 'douyin', detect: window.detectDouyin, extract: window.extractDouyin, bodyReadiness: false, onError: 'stop' },
   { name: 'weibo', detect: window.detectWeibo, extract: window.extractWeibo, bodyReadiness: false, onError: 'stop' },
   { name: 'zhihu', detect: window.detectZhihu, extract: window.extractZhihu, bodyReadiness: false, onError: 'stop' },
-  { name: 'forum', detect: window.detectForum, extract: window.extractForum, bodyReadiness: false, onError: 'continue' },
-  { name: 'tiktok', detect: window.detectTikTok, extract: window.extractTikTok, bodyReadiness: false, onError: 'continue' },
-  { name: 'article', detect: window.detectArticle, extract: window.extractArticle, bodyReadiness: true, onError: 'continue' },
+  {
+    name: 'forum',
+    detect: window.detectForum,
+    extract: window.extractForum,
+    bodyReadiness: false,
+    onError: 'continue',
+  },
+  {
+    name: 'tiktok',
+    detect: window.detectTikTok,
+    extract: window.extractTikTok,
+    bodyReadiness: false,
+    onError: 'stop',
+  },
+  { name: 'instagram', detect: window.detectInstagram, extract: window.extractInstagram, bodyReadiness: false, onError: 'stop' },
+  { name: 'threads', detect: window.detectThreads, extract: window.extractThreads, bodyReadiness: false, onError: 'stop' },
+  {
+    name: 'article',
+    detect: window.detectArticle,
+    extract: window.extractArticle,
+    bodyReadiness: true,
+    onError: 'continue',
+  },
   // Generic must remain last: it always matches.
   { name: 'generic', detect: () => true, extract: window.extractGeneric, bodyReadiness: true, onError: 'continue' },
 ];
@@ -28,6 +66,13 @@ if (EXTRACTORS === BUILTIN_EXTRACTORS) {
 } else {
   // Refresh every built-in on reinjection, including registries from older releases.
   // Explicit fixture/custom entries remain intact. Never replace request/listener state.
+  if (EXTRACTORS.some(ex => ex._nuteggBuiltIn)) {
+    for (const entry of BUILTIN_EXTRACTORS) {
+      if (EXTRACTORS.some(ex => ex.name === entry.name)) continue;
+      const fallback = EXTRACTORS.findIndex(ex => ex.name === 'article' || ex.name === 'generic');
+      EXTRACTORS.splice(fallback < 0 ? EXTRACTORS.length : fallback, 0, { ...entry, _nuteggBuiltIn: true });
+    }
+  }
   for (const ex of EXTRACTORS) {
     const current = BUILTIN_EXTRACTORS.find(entry => entry.name === ex.name);
     if (typeof current?.extract === 'function' &&
@@ -129,20 +174,121 @@ async function runCaptureRequest(message) {
 function nuteggPlaybackIdentity() {
   syncCaptureNavigation();
   window.__nuteggDocumentId ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}:${Math.random()}`;
-  return { documentId: window.__nuteggDocumentId, pageKey: NutEggPageIdentity.playbackPageKey(location.href),
-    generation: window.__nuteggNavigationState?.generation, url: location.href };
+  return {
+    documentId: window.__nuteggDocumentId,
+    pageKey: NutEggPageIdentity.playbackPageKey(location.href),
+    generation: window.__nuteggNavigationState?.generation,
+    url: location.href,
+  };
 }
+function collectShadowVideos(root, results, visited) {
+  if (!root || visited.has(root)) return;
+  visited.add(root);
+  if (typeof root.querySelectorAll === 'function') {
+    for (const v of root.querySelectorAll('video')) {
+      if (!results.includes(v)) results.push(v);
+    }
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) collectShadowVideos(el.shadowRoot, results, visited);
+    }
+  }
+}
+
+function pickPreferredVideo(candidates) {
+  if (!candidates || candidates.length === 0) return null;
+  return (
+    candidates.find(v => v.readyState > 0 && !v.paused && (v.currentSrc || v.src)) ||
+    candidates.find(v => v.readyState > 0 && (v.currentSrc || v.src)) ||
+    candidates.find(v => !v.paused) ||
+    candidates.find(v => Boolean(v.currentSrc || v.src)) ||
+    candidates[0]
+  );
+}
+
+// Classic scripts can be reinjected into the same isolated-world global scope.
+var VIDEO_PLAYER_STRATEGIES = [
+  {
+    id: 'social',
+    resolve: () =>
+      typeof NutEggSocial !== 'undefined' && NutEggSocial.route()?.id ? NutEggSocial.inspect()?.videos?.[0] || null : null,
+  },
+  {
+    id: 'youtube',
+    resolve: () => pickPreferredVideo(Array.from(document.querySelectorAll('#movie_player video, ytd-watch-flexy video'))),
+  },
+  {
+    id: 'bilibili',
+    resolve: () => pickPreferredVideo(Array.from(document.querySelectorAll('.bpx-player-video-wrap video, #bilibili-player video'))),
+  },
+  {
+    id: 'generic-html5',
+    resolve: () =>
+      pickPreferredVideo(Array.from(document.querySelectorAll('video.html5-main-video, video.video-stream'))) ||
+      pickPreferredVideo(Array.from(document.querySelectorAll('video'))),
+  },
+  {
+    id: 'shadow-dom',
+    resolve: () => {
+      const candidates = [];
+      collectShadowVideos(document, candidates, new Set());
+      return pickPreferredVideo(candidates);
+    },
+  },
+];
+
 function nuteggPlaybackPlayer() {
-  return document.querySelector('#movie_player video, ytd-watch-flexy video') ||
-    document.querySelector('.bpx-player-video-wrap video, #bilibili-player video') ||
-    document.querySelector('video.html5-main-video, video.video-stream') || document.querySelector('video');
+  for (const strategy of VIDEO_PLAYER_STRATEGIES) {
+    const video = strategy.resolve();
+    if (video) return video;
+  }
+  return null;
 }
+globalThis.__nuteggPlaybackPlayer = nuteggPlaybackPlayer;
 function nuteggPlaybackOwned(message) {
   const identity = nuteggPlaybackIdentity();
-  return (!message.expectedUrl || NutEggPageIdentity.playbackPageKey(message.expectedUrl) === identity.pageKey) &&
+  return (
+    (!message.expectedUrl || NutEggPageIdentity.playbackPageKey(message.expectedUrl) === identity.pageKey) &&
     (!message.documentId || message.documentId === identity.documentId) &&
-    (message.generation == null || message.generation === identity.generation);
+    (message.generation == null || message.generation === identity.generation)
+  );
 }
+function nuteggApplyPlaybackRate(video, rate) {
+  const rounded = Math.round(rate * 100) / 100;
+  video.playbackRate = rounded;
+  if (Math.abs(video.playbackRate - rounded) > 0.01) throw new Error('rate_failed');
+  window.__nuteggAppliedSpeedKey = `${NutEggPageIdentity.playbackPageKey(location.href)}|${video.currentSrc || video.src || ''}`;
+}
+function nuteggSpeedPresetFromEvent(event) {
+  if (!event.shiftKey) return null;
+  const codeMap = { Digit2: 2, Digit3: 3, Digit4: 4, Digit5: 5 };
+  if (codeMap[event.code]) return codeMap[event.code];
+  const keyMap = { 2: 2, '@': 2, 3: 3, '#': 3, 4: 4, $: 4, 5: 5, '%': 5 };
+  return keyMap[event.key] || null;
+}
+
+// The page and extension iframe have separate keyboard event streams.
+if (window.__nuteggSpeedShortcut) document.removeEventListener('keydown', window.__nuteggSpeedShortcut, true);
+window.__nuteggSpeedShortcut = event => {
+  if (window.__nuteggVideoSpeedEnabled === false) return;
+  if (event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.composedPath().some(node => node.isContentEditable ||
+      node.matches?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="searchbox"],[role="combobox"],[role="spinbutton"]'))) return;
+  const preset = nuteggSpeedPresetFromEvent(event);
+  const delta = preset == null ? (['+', '='].includes(event.key) ? 0.25 : ['-', '_'].includes(event.key) ? -0.25 : 0) : 0;
+  if (preset == null && !delta) return;
+  const video = nuteggPlaybackPlayer();
+  if (!video || !Number.isFinite(video.playbackRate)) return;
+  if (video.readyState === 0 && !video.currentSrc && !video.src) return;
+  try {
+    const nextRate = preset != null ? preset : Math.min(16, Math.max(0.25, video.playbackRate + delta));
+    nuteggApplyPlaybackRate(video, nextRate);
+    window.dispatchEvent(new CustomEvent('nutegg:speed-changed', { detail: { rate: video.playbackRate } }));
+    chrome.runtime?.sendMessage?.({ action: 'set-preferred-video-speed', rate: video.playbackRate }).catch?.(() => {});
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  } catch {}
+};
+document.addEventListener('keydown', window.__nuteggSpeedShortcut, true);
 async function nuteggSeek(message) {
   const seconds = Number(message.seconds);
   if (!Number.isFinite(seconds) || seconds < 0)
@@ -161,14 +307,123 @@ async function nuteggSeek(message) {
         catch { return { success: false, errorCode: 'seek_failed' }; }
       }
       if (!video.seeking && Math.abs(video.currentTime - seconds) <= 1) {
-        try { video.play?.()?.catch?.(() => {}); } catch {}
-        return { success: true, type: 'video', currentTime: video.currentTime,
-          duration: video.duration, ...nuteggPlaybackIdentity() };
+        try {
+          video.play?.()?.catch?.(() => {});
+        } catch {}
+        return {
+          success: true,
+          type: 'video',
+          currentTime: video.currentTime,
+          duration: video.duration,
+          playbackRate: Number.isFinite(video.playbackRate) ? video.playbackRate : 1,
+          ...nuteggPlaybackIdentity(),
+        };
       }
     }
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   return { success: false, errorCode: video ? 'seek_timeout' : 'player_unavailable' };
+}
+
+var PAGE_READINESS_STRATEGIES = [
+  {
+    id: 'youtube',
+    match: pageUrl => /(^|\.)youtube\.com$/.test(pageUrl.hostname) && pageUrl.pathname === '/watch',
+    resolve(pageUrl, baseIdentity, sendResponse) {
+      const videoId = pageUrl.searchParams.get('v');
+      const player = typeof readYtInitialPlayerResponse === 'function' ? readYtInitialPlayerResponse() : null;
+      const captionTracksReady = !!player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length;
+      const playerReady = !!player || !!document.querySelector('#movie_player video');
+      const identity = {
+        ...baseIdentity,
+        videoId,
+        captionTracksReady,
+        youtubeReady: playerReady,
+      };
+      if (!captionTracksReady && typeof queryYouTubePlayerSnapshot === 'function') {
+        const context = createCaptureContext({ deadline: Date.now() + 500 });
+        const publish = snapshot =>
+          sendResponse({
+            ...identity,
+            url: window.location.href,
+            videoId: new URL(window.location.href).searchParams.get('v'),
+            captionTracksReady: context.isCurrent() && !!snapshot?.tracks?.length,
+            youtubeReady: context.isCurrent() && (playerReady || !!snapshot?.playerResponse),
+          });
+        queryYouTubePlayerSnapshot(context)
+          .then(publish, () => publish(null))
+          .finally(() => context.dispose())
+          .catch(() => {});
+        return true;
+      }
+      sendResponse(identity);
+      return false;
+    },
+  },
+  {
+    id: 'bilibili',
+    match: pageUrl => /(^|\.)bilibili\.com$/.test(pageUrl.hostname),
+    resolve(pageUrl, baseIdentity, sendResponse) {
+      let videoId, cid, playerReady = true;
+      if (typeof bilibiliVideoId === 'function') {
+        videoId = bilibiliVideoId();
+        const requests = performance.getEntriesByType('resource').map(entry => {
+          try {
+            return new URL(entry.name);
+          } catch {
+            return null;
+          }
+        });
+        const player = requests
+          .reverse()
+          .find(
+            url =>
+              url?.hostname === 'api.bilibili.com' &&
+              /^\/x\/player\/(?:wbi\/)?v2$/.test(url.pathname) &&
+              (url.searchParams.get('bvid') === videoId || `av${url.searchParams.get('aid')}` === videoId)
+          );
+        cid =
+          pageUrl.searchParams.get('cid') ||
+          (!pageUrl.searchParams.has('p') ? player?.searchParams.get('cid') : undefined);
+        playerReady = !!player || !!document.querySelector('video');
+      }
+      sendResponse({ ...baseIdentity, videoId, cid, bilibiliReady: playerReady });
+      return false;
+    },
+  },
+  {
+    id: 'twitter',
+    match: pageUrl =>
+      ['twitter.com', 'x.com'].some(domain => NutEggPageIdentity.hostMatches(pageUrl.href, domain)) &&
+      /\/status\/|\/article\//.test(pageUrl.pathname),
+    resolve(_pageUrl, baseIdentity, sendResponse) {
+      const twitterReady = !!document.querySelector(
+        'article[data-testid="tweet"], [data-testid="twitterArticleReadView"], [data-testid="twitterArticleRichTextView"], [data-testid="tweetText"], [data-testid="card.layoutLarge.detail"], [data-testid="primaryColumn"] [role="region"], [data-testid="error-detail"]'
+      );
+      sendResponse({ ...baseIdentity, twitterReady });
+      return false;
+    },
+  },
+];
+
+function resolvePageReadiness(sendResponse) {
+  const pageUrl = new URL(location.href);
+  const baseIdentity = {
+    success: true,
+    url: window.location.href,
+    title: document.title,
+    readyState: document.readyState,
+    videoId: undefined,
+    cid: undefined,
+    captionTracksReady: false,
+    bilibiliReady: true,
+    twitterReady: true,
+    youtubeReady: true,
+  };
+  const strategy = PAGE_READINESS_STRATEGIES.find(s => s.match(pageUrl));
+  if (strategy) return strategy.resolve(pageUrl, baseIdentity, sendResponse);
+  sendResponse(baseIdentity);
+  return false;
 }
 
 // Listen for messages from popup/background (attached once per window)
@@ -177,11 +432,21 @@ async function nuteggSeek(message) {
   if (window.__nuteggMessageListener)
     chrome.runtime.onMessage.removeListener(window.__nuteggMessageListener);
   const listener = (message, _sender, sendResponse) => {
-    if (message.action === 'nutegg-handshake') {
-      sendResponse({ success: true, version: 1, ...nuteggPlaybackIdentity(), capabilities: ['seek', 'position'] });
+    if (globalThis.__nuteggPanelMessage?.(message, _sender, sendResponse)) return false;
+    if (message.action === 'nutegg-speed-settings-updated') {
+      window.dispatchEvent(new CustomEvent('nutegg:speed-settings-updated', { detail: message.settings || {} }));
       return false;
     }
-    if (['nutegg-seek', 'nutegg-cancel-seek', 'nutegg-page-position'].includes(message.action) && !nuteggPlaybackOwned(message)) {
+    if (message.action === 'nutegg-handshake') {
+      sendResponse({ success: true, version: 1, ...nuteggPlaybackIdentity(), capabilities: ['seek', 'position', 'playback-rate'] });
+      return false;
+    }
+    if (
+      ['nutegg-seek', 'nutegg-cancel-seek', 'nutegg-page-position', 'nutegg-set-playback-rate'].includes(
+        message.action
+      ) &&
+      !nuteggPlaybackOwned(message)
+    ) {
       sendResponse({ success: false, errorCode: 'stale' });
       return false;
     }
@@ -229,83 +494,7 @@ async function nuteggSeek(message) {
       return false;
     }
     if (message.action === 'page-identity') {
-      const pageUrl = new URL(location.href);
-      const isYouTube = /(^|\.)youtube\.com$/.test(pageUrl.hostname) && pageUrl.pathname === '/watch';
-      const isBilibili = /(^|\.)bilibili\.com$/.test(pageUrl.hostname);
-      let videoId,
-        cid,
-        captionTracksReady = false,
-        playerReady = true;
-      if (isYouTube) {
-        videoId = pageUrl.searchParams.get('v');
-        const player = typeof readYtInitialPlayerResponse === 'function' ? readYtInitialPlayerResponse() : null;
-        captionTracksReady = !!player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length;
-        playerReady = !!player || !!document.querySelector('#movie_player video');
-      } else if (isBilibili && typeof bilibiliVideoId === 'function') {
-        videoId = bilibiliVideoId();
-        const requests = performance.getEntriesByType('resource').map(entry => {
-          try {
-            return new URL(entry.name);
-          } catch {
-            return null;
-          }
-        });
-        const player = requests
-          .reverse()
-          .find(
-            url =>
-              url?.hostname === 'api.bilibili.com' &&
-              /^\/x\/player\/(?:wbi\/)?v2$/.test(url.pathname) &&
-              (url.searchParams.get('bvid') === videoId || `av${url.searchParams.get('aid')}` === videoId)
-          );
-        cid =
-          pageUrl.searchParams.get('cid') ||
-          (!pageUrl.searchParams.has('p') ? player?.searchParams.get('cid') : undefined);
-        playerReady = !!player || !!document.querySelector('video');
-      }
-      // Cheap page-state check (no transcript fetching) — the popup uses it to
-      // wait for the page to settle and to detect SPA navigation races.
-      const isTwitter =
-        ['twitter.com', 'x.com'].some(domain => NutEggPageIdentity.hostMatches(location.href, domain)) &&
-        /\/status\/|\/article\//.test(pageUrl.pathname);
-      const twitterReady =
-        !isTwitter ||
-        !!document.querySelector(
-          'article[data-testid="tweet"], [data-testid="twitterArticleReadView"], [data-testid="twitterArticleRichTextView"], [data-testid="tweetText"], [data-testid="card.layoutLarge.detail"], [data-testid="primaryColumn"] [role="region"], [data-testid="error-detail"]'
-        );
-      const identity = {
-        success: true,
-        url: window.location.href,
-        title: document.title,
-        readyState: document.readyState,
-        videoId,
-        cid,
-        captionTracksReady,
-        bilibiliReady: !isBilibili || playerReady,
-        twitterReady,
-        // YouTube: the watch page shell has rendered (not the loading skeleton)
-        youtubeReady: !isYouTube || playerReady,
-      };
-      if (isYouTube && !captionTracksReady && typeof queryYouTubePlayerSnapshot === 'function') {
-        // SPA player data can become ready without replacing initial script tags.
-        // Read-only lookup: it must never start a second capture or move the UI.
-        const context = createCaptureContext({ deadline: Date.now() + 500 });
-        const publish = snapshot =>
-          sendResponse({
-            ...identity,
-            url: window.location.href,
-            videoId: new URL(window.location.href).searchParams.get('v'),
-            captionTracksReady: context.isCurrent() && !!snapshot?.tracks?.length,
-            youtubeReady: context.isCurrent() && (playerReady || !!snapshot?.playerResponse),
-          });
-        queryYouTubePlayerSnapshot(context)
-          .then(publish, () => publish(null))
-          .finally(() => context.dispose())
-          .catch(() => {});
-        return true;
-      }
-      sendResponse(identity);
-      return false;
+      return resolvePageReadiness(sendResponse);
     }
 
     if (message.action === 'nutegg-seek') {
@@ -313,15 +502,67 @@ async function nuteggSeek(message) {
       return true;
     }
 
-    if (message.action === 'nutegg-page-position') {
+    if (message.action === 'nutegg-set-playback-rate') {
       const video = nuteggPlaybackPlayer();
-      if (video && video.readyState > 0 && Number.isFinite(video.currentTime)) {
+      const rate = Number(message.rate);
+      if (!video) {
+        sendResponse({ success: false, errorCode: 'player_unavailable' });
+        return false;
+      }
+      if (!Number.isFinite(rate) || rate < 0.25 || rate > 16) {
+        sendResponse({ success: false, errorCode: 'invalid_rate' });
+        return false;
+      }
+      try {
+        const rounded = Math.round(rate * 100) / 100;
+        nuteggApplyPlaybackRate(video, rounded);
+        window.dispatchEvent(new CustomEvent('nutegg:speed-changed', { detail: { rate: video.playbackRate } }));
         sendResponse({
           success: true,
           type: 'video',
-          currentTime: video.currentTime,
+          currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
           duration: isNaN(video.duration) ? 0 : video.duration,
           paused: Boolean(video.paused),
+          playbackRate: Number.isFinite(video.playbackRate) ? video.playbackRate : rounded,
+          ...nuteggPlaybackIdentity(),
+        });
+      } catch {
+        sendResponse({ success: false, errorCode: 'rate_failed' });
+      }
+      return false;
+    }
+
+    if (message.action === 'nutegg-page-position') {
+      const video = nuteggPlaybackPlayer();
+      if (video && (video.readyState > 0 || Number.isFinite(video.currentTime))) {
+        const videoKey = `${NutEggPageIdentity.playbackPageKey(location.href)}|${video.currentSrc || video.src || ''}`;
+        const pref = Number(message.preferredRate);
+        // Respect a speed already selected by the website or another control.
+        // Only mark the key applied once normal 1x playback is actually updated so
+        // SPA transitions (where playbackRate is still stale before the player resets to 1x)
+        // do not prematurely suppress re-application.
+        if (
+          window.__nuteggAppliedSpeedKey !== videoKey &&
+          video.playbackRate === 1 &&
+          Number.isFinite(pref) &&
+          pref >= 0.25 &&
+          pref <= 16 &&
+          pref !== 1
+        ) {
+          window.__nuteggAppliedSpeedKey = videoKey;
+          window.__nuteggAppliedSpeedAt = Date.now();
+          try {
+            video.playbackRate = Math.round(pref * 100) / 100;
+          } catch {}
+        }
+        sendResponse({
+          success: true,
+          type: 'video',
+          currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+          duration: isNaN(video.duration) ? 0 : video.duration,
+          paused: Boolean(video.paused),
+          playbackRate: Number.isFinite(video.playbackRate) ? video.playbackRate : 1,
+          onPageSpeedOverlay: Boolean(document.getElementById('nutegg-video-speed-overlay')),
           ...nuteggPlaybackIdentity(),
         });
         return false;

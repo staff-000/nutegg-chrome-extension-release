@@ -1,5 +1,7 @@
-if (typeof module !== 'undefined' && module.exports && typeof require === 'function')
+if (typeof module !== 'undefined' && module.exports && typeof require === 'function') {
   globalThis.NutEggPageIdentity ||= require('../../../dist/page-identity.js');
+  globalThis.NutEggHelpers ||= require('../helpers.js').NutEggHelpers;
+}
 // ============================================================
 // NutEgg Popup Services — Page Extractor & Tab Driver
 // ============================================================
@@ -116,12 +118,9 @@ class PageExtractor {
     let extractionTimeout = 8000;
     try {
       const tab = await chrome.tabs.get(tabId);
-      const host = new URL(tab.url).hostname;
       // Video extraction can require several API/subtitle requests.
       // Keep the ordinary-page failure budget at 8s rather than slowing all sites.
-      if (
-        ['youtube.com', 'bilibili.com', 'douyin.com'].some(domain => host === domain || host.endsWith(`.${domain}`))
-      ) {
+      if (globalThis.NutEggHelpers?.matchSiteFromUrl?.(tab.url)?.isVideo) {
         extractionTimeout = 20000;
       }
     } catch {}
@@ -389,20 +388,8 @@ class PageExtractor {
    */
   detectPageTypeFromUrl(url = '') {
     if (!url) return '🌐 Webpage';
-    if (['twitter.com', 'x.com'].some(domain => NutEggPageIdentity.hostMatches(url, domain))) return '🐦 Twitter/X';
-    if (NutEggPageIdentity.hostMatches(url, 'youtube.com')) return '📺 YouTube';
-    try {
-      const host = new URL(url).hostname;
-      for (const [domain, label] of [
-        ['bilibili.com', '📺 Bilibili'],
-        ['douyin.com', '📺 Douyin'],
-        ['weibo.com', '📝 Weibo'],
-        ['weibo.cn', '📝 Weibo'],
-        ['zhihu.com', '📝 Zhihu'],
-      ]) {
-        if (host === domain || host.endsWith(`.${domain}`)) return label;
-      }
-    } catch {}
+    const matched = globalThis.NutEggHelpers?.matchSiteFromUrl?.(url);
+    if (matched?.label) return matched.label;
     return '🌐 Webpage';
   }
 
@@ -449,8 +436,8 @@ class PageExtractor {
   connectionError(code, error) {
     return Object.assign(new Error(error?.message || code), { code });
   }
-  async ensurePageConnection(tabId, { expectedUrl, isCurrent = () => true, explicit = false, owner = '' } = {}) {
-    const key = `${tabId}:${owner}:${expectedUrl ? NutEggPageIdentity.playbackPageKey(expectedUrl) : ''}`;
+  async ensurePageConnection(tabId, { expectedUrl, isCurrent = () => true, explicit = false, owner = '', capability = '' } = {}) {
+    const key = `${tabId}:${owner}:${capability}:${expectedUrl ? NutEggPageIdentity.playbackPageKey(expectedUrl) : ''}`;
     if (explicit) this.failedConnections.delete(key);
     if (this.failedConnections.has(key)) throw this.connectionError('connection_unavailable');
     const check = () => { if (!isCurrent()) throw this.connectionError('stale'); };
@@ -471,7 +458,8 @@ class PageExtractor {
           check();
           if (response?.version !== 1 || !response.success || !response.documentId ||
               !Number.isInteger(response.generation) || !Array.isArray(response.capabilities) || !response.capabilities.includes('seek') ||
-              !response.capabilities.includes('position')) throw this.connectionError('incompatible_listener');
+              !response.capabilities.includes('position') ||
+              (capability && !response.capabilities.includes(capability))) throw this.connectionError('incompatible_listener');
           if (expectedUrl && response.pageKey !== NutEggPageIdentity.playbackPageKey(expectedUrl))
             throw this.connectionError('stale');
           return response;
@@ -574,7 +562,28 @@ class PageExtractor {
    */
   async getPagePosition(tabId, targets = null, options = {}) {
     if (tabId == null) return null;
-    return this.playbackCommand(tabId, 'nutegg-page-position', targets ? { targets } : {}, options);
+    const payload = {};
+    if (targets) payload.targets = targets;
+    if (Number.isFinite(options.preferredRate)) payload.preferredRate = options.preferredRate;
+    return this.playbackCommand(tabId, 'nutegg-page-position', payload, {
+      ...options, capability: 'playback-rate',
+    });
+  }
+
+  /**
+   * Set video playback speed (0.25x to 16x) on the active video player in the tab.
+   */
+  async setPlaybackRate(tabId, rate, options = {}) {
+    if (tabId == null) throw this.connectionError('stale');
+    const numeric = Number(rate);
+    if (!Number.isFinite(numeric) || numeric < 0.25 || numeric > 16) {
+      throw this.connectionError('invalid_rate');
+    }
+    return this.playbackCommand(tabId, 'nutegg-set-playback-rate', { rate: numeric }, {
+      ...options,
+      explicit: true,
+      capability: 'playback-rate',
+    });
   }
 
 }

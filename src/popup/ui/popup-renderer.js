@@ -10,7 +10,13 @@ class PopupRenderer {
     if (['viewed', 'receipt'].includes(event.type)) return;
     if (event.tabId != null && event.tabId !== this.store.activeTabId) return;
     if (event.type === 'playbackPosition') {
-      this.ui.mindmapUI.updateProgress?.(this.store.getTab(event.tabId)?.playbackPosition);
+      const tab = this.store.getTab(event.tabId);
+      this.ui.mindmapUI.updateProgress?.(tab?.playbackPosition);
+      const showSpeed =
+        globalThis.NutEggUI?.shouldShowPanelVideoSpeed?.(tab, this.settings) ??
+        this.settings?.videoSpeedEnabled !== false;
+      this.ui.captureUI.updateVideoSpeed?.(tab, this.settings?.preferredVideoSpeed, showSpeed);
+      this.ui.resultsUI.updateVideoSpeed?.(tab, this.settings?.preferredVideoSpeed, showSpeed);
       return;
     }
     this.render();
@@ -61,6 +67,10 @@ class PopupRenderer {
     ui.sectionsUI.updateUI(view.enabledSections, view.generateKnowledgeEntries, true);
     ui.sectionsUI.renderPresentation(view.presentation);
     ui.resultsUI.render(view, settings);
+    const showPanelSpeed =
+      globalThis.NutEggUI?.shouldShowPanelVideoSpeed?.(view, settings) ?? settings?.videoSpeedEnabled !== false;
+    ui.captureUI.updateVideoSpeed?.(view, settings?.preferredVideoSpeed, showPanelSpeed);
+    ui.resultsUI.updateVideoSpeed?.(view, settings?.preferredVideoSpeed, showPanelSpeed);
     const isFunctional =
       (obsidianMode ? settings.serverOnline && settings.obsidianAiConfigured : settings.chromeAiConfigured) ||
       !!view.analysisResult;
@@ -239,10 +249,21 @@ class PopupRenderer {
     keyed('mindmapPosition', [view.analysisResult?.mindMap, view.playbackPosition], () =>
       ui.mindmapUI.updateProgress?.(view.playbackPosition)
     );
-    keyed('qa', [view.resultRevision, view.followUpQa], () =>
-      ui.qaUI.render(view.analysisResult || {}, view.followUpQa)
+    keyed(
+      'qa',
+      [view.resultRevision, view.followUpQa, settings.connectionMode, settings.userNotesEnabled],
+      () =>
+        ui.qaUI.render(view.analysisResult || {}, view.followUpQa, {
+          canSaveToNotes: obsidianMode && settings.userNotesEnabled !== false,
+          onSaveToNotes: qa => ui.notesUI?.addQaNote?.(qa),
+        })
     );
     ui.qaUI.setFollowupLoading(view.busy);
+    keyed(
+      'notes',
+      [view.resultRevision, view.userNotes, settings.connectionMode, settings.userNotesEnabled],
+      () => ui.notesUI?.render(view, settings)
+    );
     keyed(
       'eggs',
       [
@@ -298,7 +319,9 @@ class PopupRenderer {
         root.getElementById?.(id)?.classList.add('hidden');
       }
     }
-    if (obsidianMode) root.getElementById?.('chrome-knowledge-section')?.classList.add('hidden');
+    if (obsidianMode && (view.analysisResult?.eggResults?.length || !view.analysisResult?.extractedEntries?.length)) {
+      root.getElementById?.('chrome-knowledge-section')?.classList.add('hidden');
+    }
     ui.resultsUI.renderSectionFailures?.(view, settings);
     const debugMode = settings.isChromeMode() ? 'chrome' : 'obsidian';
     const debugInfo = view.debugInfo?.mode === debugMode ? view.debugInfo : null;
@@ -312,6 +335,9 @@ class PopupRenderer {
         view.operations?.analysis?.running,
         view.analysisResult?.stage,
         view.analysisResult?.mode,
+        view.analysisResult?.contentMetadata,
+        view.resultRevision,
+        view.panelClassification,
         view.analysisResult?.conversation?.format,
         view.analysisResult?.matchedEggs,
         view.extractedContent?.content?.length,

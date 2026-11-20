@@ -63,8 +63,11 @@ class AnalysisActivityComponent {
 
   render(entries) {
     const unread = entries
-      .filter(entry => !entry.running)
+      .filter(entry => !entry.running && !entry.failed)
       .sort((a, b) => a.completedAt - b.completedAt || a.revision - b.revision);
+    const failed = entries
+      .filter(entry => !entry.running && entry.failed)
+      .sort((a, b) => (a.failedAt || 0) - (b.failedAt || 0) || a.revision - b.revision);
     const running = entries
       .filter(entry => entry.running && !entry.waiting)
       .sort((a, b) => a.startedAt - b.startedAt || a.revision - b.revision);
@@ -72,9 +75,10 @@ class AnalysisActivityComponent {
       .filter(entry => entry.waiting)
       .sort((a, b) => a.startedAt - b.startedAt || a.revision - b.revision);
     const parts = [];
+    if (unread.length) parts.push(`✅ ${t('activityUnreadCount', { count: unread.length })}`);
+    if (failed.length) parts.push(`❌ ${t('activityFailedCount', { count: failed.length })}`);
     if (running.length) parts.push(`⏳ ${t('activityRunningCount', { count: running.length })}`);
     if (waiting.length) parts.push(`⌛ ${t('activityWaitingCount', { count: waiting.length })}`);
-    if (unread.length) parts.push(`✅ ${t('activityUnreadCount', { count: unread.length })}`);
     if (parts.length) {
       this.container?.classList.remove('hidden');
     } else {
@@ -88,9 +92,10 @@ class AnalysisActivityComponent {
     if (!this.list) return;
     this.list.replaceChildren();
     for (const [items, label] of [
+      [unread, 'activityUnread'],
+      [failed, 'activityFailed'],
       [running, 'activityRunning'],
       [waiting, 'activityWaiting'],
-      [unread, 'activityUnread'],
     ]) {
       if (!items.length) continue;
       const heading = this.root.createElement('div');
@@ -101,7 +106,10 @@ class AnalysisActivityComponent {
         const row = this.root.createElement('button');
         row.type = 'button';
         row.dataset.activityTab = String(entry.tabId);
-        row.textContent = `${entry.waiting ? '⌛' : entry.running ? '⏳' : '✅'} ${entry.title || t('activityUntitled')}`;
+        const title = entry.title || t('activityUntitled');
+        row.textContent = entry.failed
+          ? `❌ ${title}${entry.errorMessage ? ` — ${entry.errorMessage}` : ''}`
+          : `${entry.waiting ? '⌛' : entry.running ? '⏳' : '✅'} ${title}`;
         row.title = row.textContent;
         this.list.appendChild(row);
       }
